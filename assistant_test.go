@@ -7,6 +7,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -56,6 +58,7 @@ func TestGameBridgeThroughMCP(t *testing.T) {
 	var writes atomic.Int32
 	var changed atomic.Bool
 	var partial atomic.Bool
+	var driftDuringPreview atomic.Bool
 	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
@@ -67,7 +70,11 @@ func TestGameBridgeThroughMCP(t *testing.T) {
 			fmt.Fprint(w, `{"mentalities":[{"key":"Positive"}]}`)
 		case "/api/v1/tactics":
 			if r.Method == http.MethodGet {
-				fmt.Fprintf(w, `{"changed":%t}`, changed.Load())
+				if changed.Load() {
+					fmt.Fprint(w, `{"slot":2,"changed":true}`)
+				} else {
+					fmt.Fprint(w, `{"changed":false,"slot":2}`)
+				}
 				return
 			}
 			var in liveTacticInput
@@ -84,6 +91,9 @@ func TestGameBridgeThroughMCP(t *testing.T) {
 				}
 			} else {
 				fmt.Fprint(w, `{"slot":2,"applied":false,"steps":[{"status":"Planned"}]}`)
+				if driftDuringPreview.Load() {
+					changed.Store(false)
+				}
 			}
 		case "/api/v1/squad":
 			fmt.Fprint(w, `{"teamName":"City","players":[{"playerId":7}]}`)
@@ -140,9 +150,51 @@ func TestGameBridgeThroughMCP(t *testing.T) {
 	if result.Applied || result.Note == "" || writes.Load() != 1 {
 		t.Fatalf("failed step should be exposed as partial: %+v", result)
 	}
+	preview = callTool[bridgePreview](t, session, "preview_live_tactic", args)
+	driftDuringPreview.Store(true)
+	stale, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "apply_live_action", Arguments: map[string]any{"token": preview.Token}})
+	if err != nil || !stale.IsError || writes.Load() != 1 {
+		t.Fatalf("state drift during the final dry run was accepted: %v %v", stale, err)
+	}
+	mismatched := callTool[bridgePreview](t, session, "preview_trial_offer", map[string]any{"player_id": 99, "weeks": 2})
+	if mismatched.Token != "" || writes.Load() != 1 {
+		t.Fatal("preview for a different player was accepted")
+	}
 	trial := callTool[bridgePreview](t, session, "preview_trial_offer", map[string]any{"player_id": 7, "weeks": 2})
 	result = callTool[bridgeResult](t, session, "apply_live_action", map[string]any{"token": trial.Token})
 	if !result.Applied || writes.Load() != 2 {
 		t.Fatalf("trial failed: %s, %+v", strconv.Itoa(int(writes.Load())), result)
+	}
+}
+
+func TestSavedMatchSnapshotSurvivesAutosave(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "career.fm")
+	writeFixture(t, path, "first revision")
+	copied, cleanup, err := (matchSource{save: path}).snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	writeFixture(t, path, "next revision")
+	snapshot, err := os.ReadFile(copied.save)
+	if err != nil || string(snapshot) != "first revision" {
+		t.Fatalf("snapshot changed: %q, %v", snapshot, err)
+	}
+	cleanup()
+	if _, err := os.Stat(copied.save); !os.IsNotExist(err) {
+		t.Fatalf("temporary save was not cleaned up: %v", err)
+	}
+}
+
+func TestScoutUsesPermanentWageForLoanPlayers(t *testing.T) {
+	data := &playerData{Players: []player{
+		{UID: 1, Name: "One", Contract: &deal{Loan: true, Wage: new(100)}, Parent: &parentClub{Name: "Parent", Wage: new(2000)}},
+		{UID: 2, Name: "Two", Contract: &deal{Loan: true, Wage: new(100)}},
+		{UID: 3, Name: "Three", Contract: &deal{Loan: true, Wage: new(100)}, Parent: &parentClub{Name: "Parent", Wage: new(400)}},
+	}}
+	result, err := scout(data, scoutInput{MaxWage: new(1000)})
+	if err != nil || len(result.Players) != 1 || result.Players[0].UID != 3 ||
+		result.Players[0].Parent != "Parent" || value(result.Players[0].Wage) != 400 {
+		t.Fatalf("incorrect wage filter: %+v, %v", result, err)
 	}
 }

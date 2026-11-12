@@ -24,16 +24,17 @@ func fold(s string) string {
 }
 
 type playerRow struct {
-	UID   uint32 `json:"uid"`
-	Name  string `json:"name,omitempty"`
-	Club  string `json:"club,omitempty"`
-	CA    int    `json:"ca"`
-	PA    *int   `json:"pa,omitempty"`
-	Age   *int   `json:"age,omitempty"`
-	Fit   int    `json:"position_rating,omitempty"`
-	Loan  string `json:"loan_status,omitempty"`
-	Wage  *int   `json:"weekly_wage_gbp,omitempty"`
-	Value *int   `json:"unverified_value_gbp,omitempty"`
+	UID    uint32 `json:"uid"`
+	Name   string `json:"name,omitempty"`
+	Club   string `json:"club,omitempty"`
+	CA     int    `json:"ca"`
+	PA     *int   `json:"pa,omitempty"`
+	Age    *int   `json:"age,omitempty"`
+	Fit    int    `json:"position_rating,omitempty"`
+	Loan   string `json:"loan_status,omitempty"`
+	Wage   *int   `json:"weekly_wage_gbp,omitempty"`
+	Parent string `json:"parent_club,omitempty"`
+	Value  *int   `json:"unverified_value_gbp,omitempty"`
 }
 
 func (p player) row(date string) playerRow {
@@ -44,7 +45,9 @@ func (p player) row(date string) playerRow {
 	if p.Club != nil {
 		row.Club = p.Club.Name
 	}
-	if p.Contract != nil {
+	if p.Parent != nil {
+		row.Wage, row.Parent = p.Parent.Wage, p.Parent.Name
+	} else if p.Contract != nil && !p.Contract.Loan {
 		row.Wage = p.Contract.Wage
 	}
 	today, e1 := time.Parse(time.DateOnly, date)
@@ -180,7 +183,7 @@ type scoutInput struct {
 	MaxAge   *int   `json:"max_age,omitempty"`
 	MinCA    *int   `json:"min_ca,omitempty"`
 	MinPA    *int   `json:"min_pa,omitempty"`
-	MaxWage  *int   `json:"max_weekly_wage_gbp,omitempty"`
+	MaxWage  *int   `json:"max_weekly_wage_gbp,omitempty" jsonschema:"Ceiling on the player’s permanent contract wage, not the loan contribution"`
 	MaxValue *int   `json:"max_unverified_value_gbp,omitempty" jsonschema:"Ceiling on an unverified stored figure, not an asking price"`
 	Limit    int    `json:"limit,omitempty" jsonschema:"Maximum results, 1 to 50, defaults to 15"`
 }

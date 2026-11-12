@@ -27,6 +27,7 @@ type deal struct {
 type parentClub struct {
 	UID  uint32 `json:"club_uid"`
 	Name string `json:"club_name"`
+	Wage *int   `json:"weekly_wage"`
 }
 
 type player struct {

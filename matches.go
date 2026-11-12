@@ -7,10 +7,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"math"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -172,13 +174,59 @@ func (s matchSource) review(ctx context.Context, in matchInput) (matchReview, er
 	if s.cli == "" {
 		return matchReview{}, fmt.Errorf("provide stats from the FM match report or configure a match source")
 	}
-	m, notes, err := s.savedMatch(ctx, in)
+	stable, cleanup, err := s.snapshot()
+	if err != nil {
+		return matchReview{}, err
+	}
+	defer cleanup()
+	m, notes, err := stable.savedMatch(ctx, in)
 	if err != nil {
 		return matchReview{}, err
 	}
 	out, err := analyzeMatch(m)
 	out.Notes = append(notes, out.Notes...)
 	return out, err
+}
+
+// The export calls must all read the same career revision, even if FM autosaves.
+func (s matchSource) snapshot() (matchSource, func(), error) {
+	before, err := os.Stat(s.save)
+	if err != nil || !before.Mode().IsRegular() {
+		return s, nil, fmt.Errorf("cannot read the configured FM save")
+	}
+	src, err := os.Open(s.save)
+	if err != nil {
+		return s, nil, fmt.Errorf("cannot open the configured FM save")
+	}
+	defer src.Close()
+	opened, err := src.Stat()
+	if err != nil || !sameSaveRevision(before, opened) {
+		return s, nil, fmt.Errorf("the save changed while opening it; retry after FM finishes saving")
+	}
+	dir, err := os.MkdirTemp("", "fm-match-")
+	if err != nil {
+		return s, nil, fmt.Errorf("cannot create a workspace for match review: %w", err)
+	}
+	cleanup := func() { _ = os.RemoveAll(dir) }
+	snapshot := filepath.Join(dir, "snapshot.fm")
+	dst, err := os.OpenFile(snapshot, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		cleanup()
+		return s, nil, err
+	}
+	n, copyErr := io.Copy(dst, io.LimitReader(src, opened.Size()+1))
+	closeErr := dst.Close()
+	after, statErr := os.Stat(s.save)
+	if copyErr != nil || closeErr != nil || statErr != nil || n != opened.Size() || !sameSaveRevision(opened, after) {
+		cleanup()
+		return s, nil, fmt.Errorf("could not snapshot the save; retry after FM finishes saving")
+	}
+	s.save = snapshot
+	return s, cleanup, nil
+}
+
+func sameSaveRevision(a, b os.FileInfo) bool {
+	return os.SameFile(a, b) && a.Size() == b.Size() && a.ModTime().Equal(b.ModTime())
 }
 
 type matchKey struct {

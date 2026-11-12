@@ -195,12 +195,13 @@ type scoutActionInput struct {
 type liveWrite struct {
 	endpoint, stateEndpoint string
 	body                    any
+	target                  int
 	state                   [32]byte
 	dryRun                  [32]byte
 }
 
 type bridgePreview struct {
-	Token string         `json:"token"`
+	Token string         `json:"token,omitempty"`
 	Plan  map[string]any `json:"plan"`
 }
 
@@ -223,7 +224,53 @@ func (g *gameAPI) liveState(ctx context.Context, endpoint string) ([32]byte, err
 	if err := g.request(ctx, http.MethodGet, endpoint, nil, &state); err != nil {
 		return [32]byte{}, err
 	}
-	return sha256.Sum256(append(season, state...)), nil
+	return bridgeFingerprint(season, state)
+}
+
+// JSON member ordering does not change the approved plan or game state.
+func bridgeFingerprint(messages ...json.RawMessage) ([32]byte, error) {
+	values := make([]any, 0, len(messages))
+	for _, message := range messages {
+		decoder := json.NewDecoder(bytes.NewReader(message))
+		decoder.UseNumber()
+		var value any
+		if err := decoder.Decode(&value); err != nil {
+			return [32]byte{}, err
+		}
+		values = append(values, value)
+	}
+	canonical, err := json.Marshal(values)
+	return sha256.Sum256(canonical), err
+}
+
+type liveWriteResponse struct {
+	Applied               bool
+	Slot, Count, PlayerID int
+	ConfirmationIsWarning bool
+	Steps                 []struct{ Status string }
+	Players               []struct{ PlayerID int }
+}
+
+func (r liveWriteResponse) matches(plan liveWrite, status string) bool {
+	if r.ConfirmationIsWarning {
+		return false
+	}
+	switch plan.endpoint {
+	case "trials":
+		return r.Count == 1 && len(r.Players) == 1 && r.Players[0].PlayerID == plan.target
+	case "tactics":
+		if r.Slot != plan.target || len(r.Steps) == 0 {
+			return false
+		}
+		for _, step := range r.Steps {
+			if !strings.EqualFold(step.Status, status) {
+				return false
+			}
+		}
+		return true
+	default:
+		return r.PlayerID == plan.target
+	}
 }
 
 func (g *gameAPI) dryRun(ctx context.Context, plan liveWrite) (json.RawMessage, error) {
@@ -244,28 +291,26 @@ func (g *gameAPI) apply(ctx context.Context, plan liveWrite) (bridgeResult, erro
 	if err != nil {
 		return bridgeResult{}, err
 	}
-	if sha256.Sum256(dry) != plan.dryRun {
+	fingerprint, err := bridgeFingerprint(dry)
+	if err != nil || fingerprint != plan.dryRun {
 		return bridgeResult{}, fmt.Errorf("the game reports a different plan; preview again")
+	}
+	state, err = g.liveState(ctx, plan.stateEndpoint)
+	if err != nil {
+		return bridgeResult{}, err
+	}
+	if state != plan.state {
+		return bridgeResult{}, fmt.Errorf("the game changed during the final check; preview again")
 	}
 	var raw json.RawMessage
 	if err := g.request(ctx, http.MethodPost, plan.endpoint+"?apply=true", plan.body, &raw); err != nil {
 		return bridgeResult{}, fmt.Errorf("apply did not return a result; check the game before retrying: %w", err)
 	}
-	var result struct {
-		Applied bool
-		Count   int
-		Steps   []struct{ Status string }
-	}
+	var result liveWriteResponse
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return bridgeResult{}, fmt.Errorf("check the game; apply returned an unreadable result")
 	}
-	success := result.Applied
-	for _, step := range result.Steps {
-		success = success && strings.EqualFold(step.Status, "Done")
-	}
-	if plan.endpoint == "trials" {
-		success = success && result.Count == 1
-	}
+	success := result.Applied && result.matches(plan, "Done")
 	details, err := jsonObject(raw)
 	if err != nil {
 		return bridgeResult{}, err
@@ -358,12 +403,7 @@ func registerGameAPI(server *mcp.Server, g *gameAPI) {
 		if err != nil {
 			return bridgePreview{}, err
 		}
-		var response struct {
-			Applied               bool
-			Count                 int
-			ConfirmationIsWarning bool
-			Steps                 []struct{ Status string }
-		}
+		var response liveWriteResponse
 		if err := json.Unmarshal(dry, &response); err != nil || response.Applied {
 			return bridgePreview{}, fmt.Errorf("bridge did not return a valid dry run")
 		}
@@ -371,15 +411,14 @@ func registerGameAPI(server *mcp.Server, g *gameAPI) {
 		if err != nil {
 			return bridgePreview{}, err
 		}
-		if response.ConfirmationIsWarning || plan.endpoint == "trials" && response.Count != 1 || plan.endpoint == "tactics" && len(response.Steps) == 0 {
+		if !response.matches(plan, "Planned") {
 			return bridgePreview{Plan: details}, nil
 		}
-		for _, step := range response.Steps {
-			if !strings.EqualFold(step.Status, "Planned") {
-				return bridgePreview{Plan: details}, nil
-			}
+		fingerprint, err := bridgeFingerprint(dry)
+		if err != nil {
+			return bridgePreview{}, err
 		}
-		plan.state, plan.dryRun = state, sha256.Sum256(dry)
+		plan.state, plan.dryRun = state, fingerprint
 		return bridgePreview{Token: pending.issue(plan), Plan: details}, nil
 	}
 	addTool(server, "preview_live_tactic", "Validate a tactic change in the game without applying it. Show the plan and ask the user before applying.", true,
@@ -388,7 +427,7 @@ func registerGameAPI(server *mcp.Server, g *gameAPI) {
 				in.Mentality == "" && len(in.Instructions) == 0 && in.Formation == nil && len(in.Lineup) == 0 && len(in.Bench) == 0 {
 				return bridgePreview{}, fmt.Errorf("provide a slot from 1 to 3 and at least one tactic change")
 			}
-			return preview(ctx, liveWrite{endpoint: "tactics", stateEndpoint: "tactics", body: in})
+			return preview(ctx, liveWrite{endpoint: "tactics", stateEndpoint: "tactics", body: in, target: in.Slot})
 		})
 	addTool(server, "preview_trial_offer", "Preview an in-game player trial invitation. A trial is not a transfer bid or employment offer.", true,
 		func(ctx context.Context, in trialInput) (bridgePreview, error) {
@@ -396,7 +435,7 @@ func registerGameAPI(server *mcp.Server, g *gameAPI) {
 				return bridgePreview{}, fmt.Errorf("provide a live player ID and a trial duration of 1 to 4 weeks")
 			}
 			body := map[string]any{"playerIds": []int{in.PlayerID}, "weeks": in.Weeks, "expectedPlayers": 1}
-			return preview(ctx, liveWrite{endpoint: "trials", stateEndpoint: "squad", body: body})
+			return preview(ctx, liveWrite{endpoint: "trials", stateEndpoint: "squad", body: body, target: in.PlayerID})
 		})
 	addTool(server, "preview_scouting_action", "Preview sending a scout or adding a player to the shortlist. Review the game's confirmation and scouting costs before applying.", true,
 		func(ctx context.Context, in scoutActionInput) (bridgePreview, error) {
@@ -408,7 +447,7 @@ func registerGameAPI(server *mcp.Server, g *gameAPI) {
 				body["duration"] = "Indefinitely"
 			}
 			endpoint := fmt.Sprintf("scouting/players/%d/%s", in.PlayerID, in.Action)
-			return preview(ctx, liveWrite{endpoint: endpoint, stateEndpoint: "scouting", body: body})
+			return preview(ctx, liveWrite{endpoint: endpoint, stateEndpoint: "scouting", body: body, target: in.PlayerID})
 		})
 	addTool(server, "apply_live_action", "Apply a reviewed tactic, scouting action or trial invitation using its single-use token. Inspect partial results and save in FM afterward.", false,
 		func(ctx context.Context, in tokenInput) (bridgeResult, error) {
