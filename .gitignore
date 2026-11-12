@@ -1,0 +1,8 @@
+/fm-career-mcp
+/fm-career-mcp.exe
+*.fm
+*.fmf
+*.json
+.env*
+
+/live/target/

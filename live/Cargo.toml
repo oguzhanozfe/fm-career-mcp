@@ -1,0 +1,13 @@
+[package]
+name = "fm-career-live"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+license = "GPL-3.0-or-later"
+publish = false
+
+[dependencies]
+anyhow = "1"
+serde_json = "1"
+fmlibre-core = { git = "https://github.com/tozmoz/FMLibreEditor.git", rev = "102ed6c9171480b96a1cebd2721549edf91c2654" }
+fmlibre-mem = { git = "https://github.com/tozmoz/FMLibreEditor.git", rev = "102ed6c9171480b96a1cebd2721549edf91c2654" }
