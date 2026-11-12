@@ -45,7 +45,7 @@ func TestMCPReports(t *testing.T) {
 	}
 	defer session.Close()
 	tools, err := session.ListTools(ctx, nil)
-	if err != nil || len(tools.Tools) != 7 {
+	if err != nil || len(tools.Tools) != 10 {
 		t.Fatalf("unexpected default tools: %v, %v", tools, err)
 	}
 	for _, tool := range tools.Tools {

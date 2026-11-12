@@ -78,7 +78,7 @@ type career struct {
 }
 
 type sources struct {
-	save, playerJSON, staffJSON, parser string
+	save, playerJSON, staffJSON, parser, matchCLI string
 }
 
 func (s sources) load(ctx context.Context) (career, error) {

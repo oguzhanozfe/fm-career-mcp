@@ -23,9 +23,17 @@ type editorConfig struct {
 	pid, club                          uint
 	holidays                           bool
 	allowUnknown                       bool
+	gamePort                           uint
+	gameClub                           string
 }
 
 func (e editorConfig) validate(src sources) error {
+	if e.gamePort > 65535 || e.gameClub != "" && e.gamePort == 0 {
+		return fmt.Errorf("configure a valid local -game-api-port for the live club")
+	}
+	if src.matchCLI != "" && src.save == "" {
+		return fmt.Errorf("-fmsave-cli requires -save")
+	}
 	if (e.tactics == "") != (e.template == "") {
 		return fmt.Errorf("configure both -tactics-cli and -tactic-template")
 	}
