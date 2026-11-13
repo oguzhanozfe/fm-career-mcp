@@ -12,7 +12,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const version = "0.4.0"
+const version = "0.5.0"
 
 func main() {
 	log.SetOutput(os.Stderr)
@@ -200,6 +200,7 @@ func newServer(ctx context.Context, src sources, edit editorConfig) (*mcp.Server
 			func(ctx context.Context, in coachInput) (coachOutput, error) { return coachBrief(ctx, src, in) })
 	}
 	registerRecruitmentTools(server, initial, current)
+	registerScoutBoard(server)
 	registerEditors(server, src, edit)
 	return server, nil
 }

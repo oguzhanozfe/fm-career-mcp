@@ -357,6 +357,7 @@ func (s matchSource) saveInfo(ctx context.Context) (savedMetadata, error) {
 }
 
 func registerPreparationTools(server *mcp.Server, src matchSource) {
+	registerPerformance(server, src)
 	addSaveTool(server, src, "fixture_plan", "List upcoming first-team fixtures with calendar-day gaps for rotation planning.",
 		func(ctx context.Context, s matchSource, c managedClub, in fixtureInput) (map[string]any, error) {
 			n, err := bounded(in.Limit, 5, 20)

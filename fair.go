@@ -81,12 +81,41 @@ type visiblePlayer struct {
 type visibleXIInput struct {
 	Style   string          `json:"style,omitempty" jsonschema:"balanced, press, or counter; defaults to balanced"`
 	Players []visiblePlayer `json:"players,omitempty" jsonschema:"Eligible players and usable positions visible to the manager; put preferred players first"`
+	Slots   []visibleSlot   `json:"slots,omitempty" jsonschema:"Optional custom formation in pitch order, exactly 11 slots including one goalkeeper; cannot be combined with style"`
+}
+
+type visibleSlot struct {
+	Position string `json:"position"`
+	Role     string `json:"role,omitempty"`
 }
 
 func planVisibleXI(_ context.Context, in visibleXIInput) (tacticOutput, error) {
-	out, slots, err := tacticShape(in.Style)
-	if err != nil {
-		return out, err
+	var out tacticOutput
+	var slots []slotSpec
+	if len(in.Slots) == 0 {
+		var err error
+		out, slots, err = tacticShape(in.Style)
+		if err != nil {
+			return out, err
+		}
+	} else {
+		if len(in.Slots) != 11 || in.Style != "" {
+			return out, fmt.Errorf("provide 11 custom slots without a preset style")
+		}
+		keepers := 0
+		for _, slot := range in.Slots {
+			code := strings.ToUpper(strings.TrimSpace(slot.Position))
+			if !slices.Contains(positions, code) {
+				return out, fmt.Errorf("unsupported position %q", code)
+			}
+			if code == "GK" {
+				keepers++
+			}
+			slots = append(slots, slotSpec{code, strings.TrimSpace(slot.Role)})
+		}
+		if keepers != 1 {
+			return out, fmt.Errorf("a custom XI needs exactly one goalkeeper slot")
+		}
 	}
 	if len(in.Players) > 50 {
 		return out, fmt.Errorf("supply at most 50 eligible players")
@@ -95,19 +124,19 @@ func planVisibleXI(_ context.Context, in visibleXIInput) (tacticOutput, error) {
 	var squad []player
 	for i, row := range in.Players {
 		name := strings.TrimSpace(row.Name)
-		if name == "" || seen[fold(name)] || len(row.Positions) == 0 || len(row.Positions) > 12 {
-			return out, fmt.Errorf("each player needs a distinct name and 1 to 12 positions")
+		if name == "" || seen[fold(name)] || len(row.Positions) == 0 || len(row.Positions) > len(positions) {
+			return out, fmt.Errorf("each player needs a distinct name and a valid position list")
 		}
 		seen[fold(name)] = true
-		positions := make(map[string]int, len(row.Positions))
+		familiarity := make(map[string]int, len(row.Positions))
 		for _, code := range row.Positions {
 			code = strings.ToUpper(strings.TrimSpace(code))
-			if !slices.Contains([]string{"GK", "DR", "DC", "DL", "DM", "MC", "MR", "ML", "AMR", "AMC", "AML", "ST"}, code) {
+			if !slices.Contains(positions, code) {
 				return out, fmt.Errorf("unsupported position %q", code)
 			}
-			positions[code] = 20
+			familiarity[code] = 20
 		}
-		squad = append(squad, player{UID: uint32(i + 1), Name: name, Positions: positions})
+		squad = append(squad, player{UID: uint32(i + 1), Name: name, Positions: familiarity})
 	}
 	out.XI = selectXI(squad, slots)
 	for i := range out.XI {
@@ -142,6 +171,7 @@ func newFairServer(src sources, edit editorConfig) (*mcp.Server, error) {
 		})
 	addTool(server, "review_match", "Analyze your first team's saved match report or the match statistics you supply.", true, s.review)
 	addTool(server, "plan_visible_xi", "Propose a tactic and optional XI using eligible players and positions supplied by the manager.", true, planVisibleXI)
+	registerScoutBoard(server)
 	if s.save != "" {
 		registerPreparationTools(server, s)
 		addSaveTool(server, s, "coach_brief", "Review the next fixtures, last result, saved tactics and saved lineup for the managed first team.", fairCoachBrief)

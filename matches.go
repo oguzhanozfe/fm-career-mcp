@@ -461,7 +461,7 @@ func sameCompetition(a, b *int) bool { return a == nil && b == nil || a != nil &
 func exportRows[T any](ctx context.Context, s matchSource, table string) ([]T, error) {
 	if s.fair {
 		switch table {
-		case "managed-clubs", "fixtures", "team-match-stats", "tactics", "selections", "training", "contracts":
+		case "managed-clubs", "fixtures", "team-match-stats", "tactics", "selections", "training", "contracts", "player-season-stats":
 		default:
 			return nil, fmt.Errorf("this save export is unavailable in fair mode")
 		}

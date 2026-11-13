@@ -187,6 +187,35 @@ type trialInput struct {
 	Weeks    int `json:"weeks" jsonschema:"Trial duration of 1 to 4 weeks"`
 }
 
+type batchTrialInput struct {
+	PlayerIDs []int  `json:"player_ids" jsonschema:"1 to 50 distinct live player IDs"`
+	Action    string `json:"action" jsonschema:"offer or end; end also withdraws pending invitations"`
+	Weeks     int    `json:"weeks,omitempty" jsonschema:"1 to 4 for invitations; omit for end"`
+}
+
+func trialPlan(in batchTrialInput) (liveWrite, error) {
+	if len(in.PlayerIDs) == 0 || len(in.PlayerIDs) > 50 {
+		return liveWrite{}, fmt.Errorf("provide 1 to 50 live player IDs")
+	}
+	ids := slices.Clone(in.PlayerIDs)
+	slices.Sort(ids)
+	if ids[0] <= 0 || len(slices.Compact(slices.Clone(ids))) != len(ids) {
+		return liveWrite{}, fmt.Errorf("provide distinct positive live player IDs")
+	}
+	body := map[string]any{"playerIds": in.PlayerIDs, "expectedPlayers": len(ids)}
+	var endpoint string
+	switch {
+	case in.Action == "offer" && in.Weeks >= 1 && in.Weeks <= 4:
+		endpoint = "trials"
+		body["weeks"] = in.Weeks
+	case in.Action == "end" && in.Weeks == 0:
+		endpoint = "trials/end"
+	default:
+		return liveWrite{}, fmt.Errorf("choose offer with 1 to 4 weeks or end without a duration")
+	}
+	return liveWrite{endpoint: endpoint, stateEndpoint: "squad", body: body, trialIDs: ids}, nil
+}
+
 type scoutActionInput struct {
 	PlayerID int    `json:"player_id" jsonschema:"Live player ID from the FM27 bridge"`
 	Action   string `json:"action" jsonschema:"scout or shortlist"`
@@ -196,6 +225,7 @@ type liveWrite struct {
 	endpoint, stateEndpoint string
 	body                    any
 	target                  int
+	trialIDs                []int
 	state                   [32]byte
 	dryRun                  [32]byte
 }
@@ -249,6 +279,8 @@ type liveWriteResponse struct {
 	ConfirmationIsWarning bool
 	Steps                 []struct{ Status string }
 	Players               []struct{ PlayerID int }
+	Skipped               []json.RawMessage
+	NotFound              []int
 }
 
 func (r liveWriteResponse) matches(plan liveWrite, status string) bool {
@@ -256,8 +288,16 @@ func (r liveWriteResponse) matches(plan liveWrite, status string) bool {
 		return false
 	}
 	switch plan.endpoint {
-	case "trials":
-		return r.Count == 1 && len(r.Players) == 1 && r.Players[0].PlayerID == plan.target
+	case "trials", "trials/end":
+		if r.Count != len(plan.trialIDs) || len(r.Players) != r.Count || len(r.Skipped) > 0 || len(r.NotFound) > 0 {
+			return false
+		}
+		ids := make([]int, len(r.Players))
+		for i, p := range r.Players {
+			ids[i] = p.PlayerID
+		}
+		slices.Sort(ids)
+		return slices.Equal(ids, plan.trialIDs)
 	case "tactics":
 		if r.Slot != plan.target || len(r.Steps) == 0 {
 			return false
@@ -445,11 +485,19 @@ func registerGameAPI(server *mcp.Server, g *gameAPI) {
 		})
 	addTool(server, "preview_trial_offer", "Preview an in-game player trial invitation. A trial is not a transfer bid or employment offer.", true,
 		func(ctx context.Context, in trialInput) (bridgePreview, error) {
-			if in.PlayerID <= 0 || in.Weeks < 1 || in.Weeks > 4 {
-				return bridgePreview{}, fmt.Errorf("provide a live player ID and a trial duration of 1 to 4 weeks")
+			plan, err := trialPlan(batchTrialInput{PlayerIDs: []int{in.PlayerID}, Action: "offer", Weeks: in.Weeks})
+			if err != nil {
+				return bridgePreview{}, err
 			}
-			body := map[string]any{"playerIds": []int{in.PlayerID}, "weeks": in.Weeks, "expectedPlayers": 1}
-			return preview(ctx, liveWrite{endpoint: "trials", stateEndpoint: "squad", body: body, target: in.PlayerID})
+			return preview(ctx, plan)
+		})
+	addTool(server, "preview_trial_batch", "Preview offering or ending trials for up to 50 players. Ending also withdraws pending invitations. Confirm all named players before applying.", true,
+		func(ctx context.Context, in batchTrialInput) (bridgePreview, error) {
+			plan, err := trialPlan(in)
+			if err != nil {
+				return bridgePreview{}, err
+			}
+			return preview(ctx, plan)
 		})
 	addTool(server, "preview_scouting_action", "Preview sending a scout or adding a player to the shortlist. Review the game's confirmation and scouting costs before applying.", true,
 		func(ctx context.Context, in scoutActionInput) (bridgePreview, error) {

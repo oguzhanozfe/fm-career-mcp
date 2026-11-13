@@ -119,6 +119,21 @@ func TestGameBridgeThroughMCP(t *testing.T) {
 			} else {
 				fmt.Fprint(w, `{"applied":false,"count":1,"players":[{"playerId":7,"name":"Sam"}]}`)
 			}
+		case "/api/v1/trials/end":
+			var in struct {
+				PlayerIDs       []int
+				ExpectedPlayers int
+			}
+			if err := json.NewDecoder(r.Body).Decode(&in); err != nil || len(in.PlayerIDs) != 2 || in.ExpectedPlayers != 2 {
+				http.Error(w, "bad trial request", http.StatusBadRequest)
+				return
+			}
+			if r.URL.Query().Get("apply") == "true" {
+				writes.Add(1)
+				fmt.Fprint(w, `{"applied":true,"count":1,"players":[{"playerId":7}],"skipped":[{"playerId":9}]}`)
+			} else {
+				fmt.Fprint(w, `{"applied":false,"count":2,"players":[{"playerId":9},{"playerId":7}]}`)
+			}
 		default:
 			http.NotFound(w, r)
 		}
@@ -195,6 +210,14 @@ func TestGameBridgeThroughMCP(t *testing.T) {
 	result = callTool[bridgeResult](t, session, "apply_live_action", map[string]any{"token": trial.Token})
 	if !result.Applied || writes.Load() != 2 {
 		t.Fatalf("trial failed: %s, %+v", strconv.Itoa(int(writes.Load())), result)
+	}
+	batch := callTool[bridgePreview](t, session, "preview_trial_batch", map[string]any{"player_ids": []int{7, 9}, "action": "end"})
+	if batch.Token == "" {
+		t.Fatalf("batch did not match the requested players: %+v", batch)
+	}
+	result = callTool[bridgeResult](t, session, "apply_live_action", map[string]any{"token": batch.Token})
+	if result.Applied || result.Note == "" || writes.Load() != 3 {
+		t.Fatalf("partial batch must report incomplete: %+v", result)
 	}
 }
 

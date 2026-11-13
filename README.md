@@ -7,7 +7,7 @@ A local [Model Context Protocol](https://modelcontextprotocol.io/) server for Fo
 Download the server for your platform from [Releases](https://github.com/oguzhanozfe/fm-career-mcp/releases), or build it from source with Go 1.26.5 or later.
 
 ```sh
-go install github.com/oguzhanozfe/fm-career-mcp@v0.4.0
+go install github.com/oguzhanozfe/fm-career-mcp@v0.5.0
 ```
 
 For direct `.fm` access, install the `fm_save_parser` executable from [fm-open-scout](https://github.com/YanivGabay/fm-open-scout/releases). Supply its absolute path or put it on PATH. FM24, FM26 and FM27 support depends on that parser. FM27 was exercised with real career files on macOS.
@@ -62,6 +62,10 @@ The server checks the configured save for changes before using its cached player
 Choose `-mode fair` for a read-only assistant coach. It reads a fixed set of manager-visible fields from your saved career, including your first team's fixtures, team match statistics, tactic slots, lineup and training calendar, plus your club's contract expiry dates. Save in FM to refresh the information. Missing reports stay missing, and you can supply the figures from the FM screen.
 
 Fair mode has no player or staff database search, hidden CA/PA or attributes, live bridge, or save-editing tools. For lineup and transfer advice, supply the positions, availability, budget and scouting reports you can see in FM. The assistant can recommend changes for you to enter in the game.
+
+- `player_performance` ranks your saved first-team season numbers by minutes, rating, goals, xG, xA or progressive passing. Per-90 rankings use a 450-minute minimum by default. The result lists the competition scopes with usable records.
+- `rank_scout_reports` scores candidates from the visible attributes you provide. Add a reference player to rank similar profiles, and add fee and wage ceilings to screen for affordability. Candidates with unknown required values stay unranked with reasons. All amounts must use the same currency. This tool also works with no save.
+- `plan_visible_xi` accepts 11 custom position slots, including wingbacks, and the positions of the eligible players you provide. It places each player at most once and leaves gaps visible.
 
 ```sh
 codex mcp add fm-career -- /absolute/path/to/fm-career-mcp \
@@ -140,11 +144,22 @@ Add `-game-club "Exact team name from the live API"` to enable the following:
 | `preview_live_tactic` | Validate changes to mentality, team instructions, formations, player slots, roles or bench |
 | `preview_scouting_action` | Review a scouting assignment or shortlist addition |
 | `preview_trial_offer` | Review an in-game player trial invitation of 1–4 weeks |
+| `preview_trial_batch` | Review inviting, ending or withdrawing trials for up to 50 players. The game must confirm every requested player before the preview can be applied. |
 | `apply_live_action` | Apply the confirmed preview and report failed or skipped steps |
 
 The live bridge uses game IDs from `live_squad` or `find_live_recruits`. Saved player IDs may differ. Changing a tactic slot can make it active, and lineup changes affect the team's shared selection. Review the preview before applying. A trial invitation is separate from a transfer or employment offer. Save in FM afterward if you want the changes to persist.
 
 The integration was tested against the upstream HTTP response shapes with a local fixture server. Actual Windows gameplay was not part of the release test. On macOS, match review and recruitment drafts work from local data. Native tactical changes can be exported with the template workflow below.
+
+## Feature coverage
+
+| Reference tool | Available here | Open gaps |
+| --- | --- | --- |
+| [Genie Scout](https://geniescout.com/features/) | Editor database filters, player comparison, and custom scoring and similarity from supplied scout reports | Native shortlist-file import/export, projected attributes, database-wide attribute similarity, development snapshots |
+| [FMDataLab](https://www.fmdatalab.com/) | Custom visible XI, current-season per-90 rankings and role-weighted scout reports | League benchmarks and automatic attribute-weighted role assignment |
+| [FootballManagerMCP](https://github.com/FootballManagerMCP/FootballManagerMCP) | Live match and opponent analysis, tactics, scout assignments, shortlist additions, trial batches | Recruitment focus management and a verified Mac live bridge |
+| [FMRTE](https://docs.fmrte.com/) and [FMLibreEditor](https://github.com/tozmoz/FMLibreEditor) | Selected heal, holiday and tactic workflows, and staff export analysis | General player, staff, club and competition editing, reusable presets and undo |
+| [Football Manager's editor](https://www.footballmanager.com/fm27/features/fm27-2d-match-engine-game-editor-and-deeper-world-upgrades) | Selected career edits through the integrations above | Pre-game database editing and full in-game editor coverage |
 
 ## Optional write tools
 

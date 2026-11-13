@@ -31,6 +31,7 @@ case "$1:$3" in
   export:team-match-stats) exit 1 ;;
   export:tactics) echo '{"club_uid":7,"team_slot":0,"name":"Balanced","potential_ability":200}' ;;
   export:selections) echo '{"club_uid":7,"team_slot":0,"slot":0,"player_name":"Keeper","current_ability":199}' ;;
+  export:player-season-stats) echo '{"club_uid":7,"team_slot":0,"kind":"overall","player_uid":1,"player_name":"Keeper","minutes":90,"current_ability":199}' ;;
   *) touch "${0%/*}/unexpected"; exit 1 ;;
 esac
 `), 0700); err != nil {
@@ -68,7 +69,7 @@ esac
 		}
 	}
 	slices.Sort(names)
-	want := []string{"career_info", "coach_brief", "compare_matches", "contract_watch", "fixture_plan", "plan_visible_xi", "recent_form", "review_match", "saved_lineup", "training_calendar"}
+	want := []string{"career_info", "coach_brief", "compare_matches", "contract_watch", "fixture_plan", "plan_visible_xi", "player_performance", "rank_scout_reports", "recent_form", "review_match", "saved_lineup", "training_calendar"}
 	if !slices.Equal(names, want) {
 		t.Fatalf("unexpected fair tools: %v", names)
 	}
@@ -81,6 +82,10 @@ esac
 	}
 	if strings.Contains(fmt.Sprint(out), "_ability") {
 		t.Fatalf("fair response included ability data: %v", out)
+	}
+	performance := callTool[map[string]any](t, session, "player_performance", nil)
+	if !strings.Contains(fmt.Sprint(performance), "Keeper") || strings.Contains(fmt.Sprint(performance), "_ability") {
+		t.Fatalf("unexpected fair performance report: %v", performance)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "unexpected")); !os.IsNotExist(err) {
 		t.Fatal("fair mode attempted a non-allowlisted export")
