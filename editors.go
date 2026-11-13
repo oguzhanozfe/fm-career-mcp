@@ -26,9 +26,21 @@ type editorConfig struct {
 	allowUnknown                       bool
 	gamePort                           uint
 	gameClub                           string
+	napas, matchLens, matchLensHome    string
+	trainerSocket                      string
+	trainerClub                        uint
 }
 
 func (e editorConfig) validate(src sources) error {
+	if e.napas != "" && src.save == "" {
+		return fmt.Errorf("-napas-mcp requires -save")
+	}
+	if e.matchLensHome != "" && e.matchLens == "" {
+		return fmt.Errorf("-matchlens-home requires -matchlens-mcp")
+	}
+	if (e.trainerSocket != "") != (e.trainerClub != 0) || e.trainerClub > 0xffffffff {
+		return fmt.Errorf("configure both -trainer-socket and a valid -trainer-club")
+	}
 	if e.gamePort > 65535 || e.gameClub != "" && e.gamePort == 0 {
 		return fmt.Errorf("configure a valid local -game-api-port for the live club")
 	}
