@@ -70,30 +70,33 @@ func coachBrief(ctx context.Context, src sources, in coachInput) (coachOutput, e
 	out := coachOutput{Career: career.info(), ClubUID: uid, Proposal: tactic}
 	out.Upcoming = upcomingFixtures(fixtures, out.Career.GameDate)
 
-	match, notes, err := stable.reviewSavedFixture(ctx, fixtures, matchInput{})
+	review, err := stable.analyzeSavedFixture(ctx, fixtures, matchInput{})
 	if err == nil {
-		var review matchReview
-		review, err = analyzeMatch(match)
-		if err == nil {
-			review.Notes = append(notes, review.Notes...)
-			out.LastMatch = &review
-		}
-	}
-	if err != nil {
+		out.LastMatch = &review
+	} else {
 		out.Notes = append(out.Notes, "Last match unavailable: "+err.Error())
 	}
 
-	tactics, err := exportRows[savedTactic](ctx, stable, "tactics")
+	out.SavedTactics, err = stable.savedTactics(ctx, managed.UID)
 	if err != nil {
 		out.Notes = append(out.Notes, "Saved tactic slots were unavailable.")
 	}
-	for _, tactic := range tactics {
-		if tactic.Club == managed.UID && tactic.TeamSlot == 0 && tactic.Name != "" {
-			out.SavedTactics = append(out.SavedTactics, tactic.tacticSummary)
-		}
-	}
 	if len(out.SavedTactics) > 0 {
 		out.Notes = append(out.Notes, "Saved tactic slots do not identify which tactic is active.")
+	}
+	return out, nil
+}
+
+func (s matchSource) savedTactics(ctx context.Context, club uint32) ([]tacticSummary, error) {
+	tactics, err := exportRows[savedTactic](ctx, s, "tactics")
+	if err != nil {
+		return nil, err
+	}
+	var out []tacticSummary
+	for _, tactic := range tactics {
+		if tactic.Club == club && tactic.TeamSlot == 0 && tactic.Name != "" {
+			out = append(out, tactic.tacticSummary)
+		}
 	}
 	return out, nil
 }

@@ -330,19 +330,30 @@ func addSaveTool[In, Out any](server *mcp.Server, src matchSource, name, descrip
 }
 
 func (s matchSource) gameDate(ctx context.Context) (time.Time, error) {
+	info, err := s.saveInfo(ctx)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return time.Parse(time.DateOnly, info.Date)
+}
+
+type savedMetadata struct {
+	Date string `json:"game_date,omitempty"`
+	Game string `json:"game,omitempty"`
+}
+
+func (s matchSource) saveInfo(ctx context.Context) (savedMetadata, error) {
+	var info savedMetadata
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	raw, err := exec.CommandContext(ctx, s.cli, "info", s.save, "--json").Output()
 	if err != nil {
-		return time.Time{}, fmt.Errorf("could not read save date: %w", err)
-	}
-	var info struct {
-		Date string `json:"game_date"`
+		return info, fmt.Errorf("could not read save metadata: %w", err)
 	}
 	if err := json.Unmarshal(raw, &info); err != nil {
-		return time.Time{}, err
+		return info, err
 	}
-	return time.Parse(time.DateOnly, info.Date)
+	return info, nil
 }
 
 func registerPreparationTools(server *mcp.Server, src matchSource) {
@@ -431,6 +442,9 @@ func registerPreparationTools(server *mcp.Server, src matchSource) {
 			}
 			return map[string]any{"contracts": expiringContracts(rows, c.UID, date, n), "note": "Check extension options in FM before making decisions."}, nil
 		})
+	if src.fair {
+		return
+	}
 	addSaveTool(server, src, "finance_history", "Read historical monthly transfer budget, payroll and wage budget for the managed club.",
 		func(ctx context.Context, s matchSource, c managedClub, in fixtureInput) (map[string]any, error) {
 			n, err := bounded(in.Limit, 3, 20)

@@ -33,15 +33,12 @@ type slotSpec struct {
 	position, role string
 }
 
-func buildTactic(data *playerData, in tacticInput) (tacticOutput, error) {
+func tacticShape(style string) (tacticOutput, []slotSpec, error) {
 	out := tacticOutput{Advice: []string{}}
-	if in.ClubUID == 0 {
-		return out, fmt.Errorf("club_uid must be positive")
-	}
 	slots := []slotSpec{
 		{"GK", "Goalkeeper"}, {"DR", "Full-back"}, {"DC", "Centre-back"}, {"DC", "Centre-back"}, {"DL", "Full-back"},
 	}
-	switch in.Style {
+	switch style {
 	case "", "balanced":
 		out.InPossession, out.OutOfPossession, out.Mentality = "4-2-3-1", "4-4-1-1", "balanced"
 		out.Instructions = []string{"Keep one pivot behind the ball.", "Drop wide attackers alongside the pivots in the defensive phase.", "Use a mid-block and distribute short when the passing lanes are open."}
@@ -58,7 +55,18 @@ func buildTactic(data *playerData, in tacticInput) (tacticOutput, error) {
 		slots = append(slots, slotSpec{"MC", "Holding midfielder"}, slotSpec{"MC", "Central midfielder"},
 			slotSpec{"MR", "Winger"}, slotSpec{"ML", "Wide midfielder"}, slotSpec{"ST", "Linking striker"}, slotSpec{"ST", "Running striker"})
 	default:
-		return out, fmt.Errorf("style must be balanced, press, or counter")
+		return out, nil, fmt.Errorf("style must be balanced, press, or counter")
+	}
+	return out, slots, nil
+}
+
+func buildTactic(data *playerData, in tacticInput) (tacticOutput, error) {
+	if in.ClubUID == 0 {
+		return tacticOutput{}, fmt.Errorf("club_uid must be positive")
+	}
+	out, slots, err := tacticShape(in.Style)
+	if err != nil {
+		return out, err
 	}
 	var squad []player
 	found := false

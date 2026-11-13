@@ -7,7 +7,7 @@ A local [Model Context Protocol](https://modelcontextprotocol.io/) server for Fo
 Download the server for your platform from [Releases](https://github.com/oguzhanozfe/fm-career-mcp/releases), or build it from source with Go 1.26.5 or later.
 
 ```sh
-go install github.com/oguzhanozfe/fm-career-mcp@v0.3.1
+go install github.com/oguzhanozfe/fm-career-mcp@v0.4.0
 ```
 
 For direct `.fm` access, install the `fm_save_parser` executable from [fm-open-scout](https://github.com/YanivGabay/fm-open-scout/releases). Supply its absolute path or put it on PATH. FM24, FM26 and FM27 support depends on that parser. FM27 was exercised with real career files on macOS.
@@ -56,6 +56,23 @@ Optional inputs:
 - Use `-staff-json /path/to/staff.json` with a Staff → Export → JSON export from [FMLibreEditor](https://github.com/tozmoz/FMLibreEditor). Include the entire staff group you want to audit. Staff-only mode works by providing just this flag.
 
 The server checks the configured save for changes before using its cached player data and reloads it after a completed write. `career_info` reports the file name, write time and in-game date, and flags the last readable revision if refresh fails. `coach_brief` and `review_match` read a fresh, stable copy for their reports. Use `reload_career` after re-exporting staff or player JSON. When using Save As, update the configured save path in the client. The file workflow reads saves written by FM, including autosaves at the configured path. It cannot issue a Save Game command to FM. Save club identifiers come from `find_clubs`. For live tools, obtain the real club UID separately from the FMLibreEditor club profile.
+
+## Fair mode
+
+Choose `-mode fair` for a read-only assistant coach. It reads a fixed set of manager-visible fields from your saved career, including your first team's fixtures, team match statistics, tactic slots, lineup and training calendar, plus your club's contract expiry dates. Save in FM to refresh the information. Missing reports stay missing, and you can supply the figures from the FM screen.
+
+Fair mode has no player or staff database search, hidden CA/PA or attributes, live bridge, or save-editing tools. For lineup and transfer advice, supply the positions, availability, budget and scouting reports you can see in FM. The assistant can recommend changes for you to enter in the game.
+
+```sh
+codex mcp add fm-career -- /absolute/path/to/fm-career-mcp \
+  -mode fair -save "/absolute/path/to/My Career.fm" -fmsave-cli /absolute/path/to/fmsave
+claude mcp add --scope user --transport stdio fm-career -- /absolute/path/to/fm-career-mcp \
+  -mode fair -save "/absolute/path/to/My Career.fm" -fmsave-cli /absolute/path/to/fmsave
+```
+
+For Claude Desktop, replace the `args` array from the setup example with `["-mode", "fair", "-save", "/absolute/path/to/My Career.fm", "-fmsave-cli", "/absolute/path/to/fmsave"]`. If the server is already registered, edit or replace the existing entry. Use just `-mode fair` to work from match statistics and eligible players you supply without a save or helper. Use `career_info` to verify the mode.
+
+The existing setup defaults to `-mode editor` for compatibility. Fair mode restricts this MCP server. For a fair-only client session, disable any separate FM editors or unrestricted save readers registered in the client.
 
 ## Analysis tools
 

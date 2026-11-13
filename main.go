@@ -12,12 +12,13 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const version = "0.3.1"
+const version = "0.4.0"
 
 func main() {
 	log.SetOutput(os.Stderr)
 	var src sources
 	var edit editorConfig
+	mode := flag.String("mode", "editor", "fair for read-only visible career data, editor for the existing full tool set")
 	flag.StringVar(&src.save, "save", "", "path to a local .fm save")
 	flag.StringVar(&src.parser, "parser", "fm_save_parser", "path to the fm-open-scout parser executable")
 	flag.StringVar(&src.playerJSON, "players-json", "", "pre-extracted fm_save_parser JSON")
@@ -35,16 +36,23 @@ func main() {
 	flag.UintVar(&edit.gamePort, "game-api-port", 0, "optional local FootballManagerMCP API port")
 	flag.StringVar(&edit.gameClub, "game-club", "", "exact live team name that may receive approved tactics and trials")
 	flag.Parse()
-	if flag.NArg() != 0 || (src.save != "" && src.playerJSON != "") ||
-		(src.save == "" && src.playerJSON == "" && src.staffJSON == "" && edit.gamePort == 0) {
+	if flag.NArg() != 0 || (*mode != "fair" && *mode != "editor") ||
+		(src.save != "" && src.playerJSON != "") ||
+		(*mode == "editor" && src.save == "" && src.playerJSON == "" && src.staffJSON == "" && edit.gamePort == 0) {
 		flag.Usage()
 		os.Exit(2)
 	}
-	if err := edit.validate(src); err != nil {
-		log.Fatal(err)
-	}
 	ctx := context.Background()
-	server, err := newServer(ctx, src, edit)
+	var server *mcp.Server
+	var err error
+	if *mode == "fair" {
+		server, err = newFairServer(src, edit)
+	} else {
+		if err := edit.validate(src); err != nil {
+			log.Fatal(err)
+		}
+		server, err = newServer(ctx, src, edit)
+	}
 	if err != nil {
 		log.Fatal(err)
 	}

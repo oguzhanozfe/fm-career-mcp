@@ -148,6 +148,7 @@ type matchSource struct {
 	cli, save string
 	live      *gameAPI
 	revision  os.FileInfo
+	fair      bool
 }
 
 func (s matchSource) review(ctx context.Context, in matchInput) (matchReview, error) {
@@ -180,7 +181,15 @@ func (s matchSource) review(ctx context.Context, in matchInput) (matchReview, er
 		return matchReview{}, err
 	}
 	defer cleanup()
-	m, notes, err := stable.savedMatch(ctx, in)
+	_, fixtures, err := stable.firstTeamFixtures(ctx)
+	if err != nil {
+		return matchReview{}, err
+	}
+	return stable.analyzeSavedFixture(ctx, fixtures, in)
+}
+
+func (s matchSource) analyzeSavedFixture(ctx context.Context, fixtures []savedFixture, in matchInput) (matchReview, error) {
+	m, notes, err := s.reviewSavedFixture(ctx, fixtures, in)
 	if err != nil {
 		return matchReview{}, err
 	}
@@ -289,14 +298,6 @@ type managedClub struct {
 	Name string `json:"club_name"`
 }
 
-func (s matchSource) savedMatch(ctx context.Context, in matchInput) (matchRecord, []string, error) {
-	_, fixtures, err := s.firstTeamFixtures(ctx)
-	if err != nil {
-		return matchRecord{}, nil, err
-	}
-	return s.reviewSavedFixture(ctx, fixtures, in)
-}
-
 func (s matchSource) firstTeamFixtures(ctx context.Context) (managedClub, []savedFixture, error) {
 	club, err := s.managedClub(ctx)
 	if err != nil {
@@ -359,10 +360,16 @@ func (s matchSource) reviewSavedFixture(ctx context.Context, fixtures []savedFix
 	_, other := f.teams()
 	stats, err := exportRows[savedStats](ctx, s, "team-match-stats")
 	if err != nil {
+		if s.fair {
+			return f.report(nil), []string{"Team statistics unavailable. Supply the numbers visible in your match report if you want a deeper review."}, nil
+		}
 		return s.withPlayerStats(ctx, f, other, f.report(nil), "This save build did not yield team match statistics.")
 	}
 	out := f.report(stats)
 	if out.Source != "saved_match_report" {
+		if s.fair {
+			return out, []string{"This fixture has no unique team report in the save."}, nil
+		}
 		return s.withPlayerStats(ctx, f, other, out, "The save has no unique pair of team statistics for this fixture.")
 	}
 	return out, nil, nil
@@ -452,6 +459,13 @@ func (s matchSource) withPlayerStats(ctx context.Context, f savedFixture, oppone
 func sameCompetition(a, b *int) bool { return a == nil && b == nil || a != nil && b != nil && *a == *b }
 
 func exportRows[T any](ctx context.Context, s matchSource, table string) ([]T, error) {
+	if s.fair {
+		switch table {
+		case "managed-clubs", "fixtures", "team-match-stats", "tactics", "selections", "training", "contracts":
+		default:
+			return nil, fmt.Errorf("this save export is unavailable in fair mode")
+		}
+	}
 	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 	scope := "--managed-club"
