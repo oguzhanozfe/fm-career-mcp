@@ -26,9 +26,6 @@ type editorConfig struct {
 	allowUnknown                       bool
 	gamePort                           uint
 	gameClub                           string
-	napas, matchLens, matchLensHome    string
-	trainerSocket                      string
-	trainerClub                        uint
 	autoTraining                       string
 }
 
@@ -37,18 +34,9 @@ func (e editorConfig) validate(src sources) error {
 		if _, _, _, err := trainingFocus(e.autoTraining); err != nil {
 			return err
 		}
-		if e.trainerSocket == "" {
-			return fmt.Errorf("-auto-training requires -trainer-socket and -trainer-club")
+		if e.tacticCopyCLI == "" || src.matchCLI == "" || src.save == "" {
+			return fmt.Errorf("-auto-training requires -save, -fmsave-cli, -tactic-copy-cli and -output-dir")
 		}
-	}
-	if e.napas != "" && src.save == "" {
-		return fmt.Errorf("-napas-mcp requires -save")
-	}
-	if e.matchLensHome != "" && e.matchLens == "" {
-		return fmt.Errorf("-matchlens-home requires -matchlens-mcp")
-	}
-	if (e.trainerSocket != "") != (e.trainerClub != 0) || e.trainerClub > 0xffffffff {
-		return fmt.Errorf("configure both -trainer-socket and a valid -trainer-club")
 	}
 	if e.gamePort > 65535 || e.gameClub != "" && e.gamePort == 0 {
 		return fmt.Errorf("configure a valid local -game-api-port for the live club")
@@ -206,9 +194,12 @@ func (e editorConfig) health(ctx context.Context, mode string, expected []byte) 
 	return out, data, nil
 }
 
-func registerEditors(server *mcp.Server, src sources, edit editorConfig) {
+func registerEditors(ctx context.Context, server *mcp.Server, src sources, edit editorConfig) {
 	if edit.tacticCopyCLI != "" {
 		registerTacticCopies(server, src, edit)
+		if src.matchCLI != "" {
+			registerTrainingCopy(ctx, server, src, edit)
+		}
 	}
 	if edit.tactics != "" {
 		addTool(server, "export_tactic", "Write a new local FMF variant of the configured template. Changes the name, mentality and tackling only.", false, edit.exportTactic)

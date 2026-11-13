@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
-	"slices"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -11,109 +13,99 @@ import (
 )
 
 type automaticTrainingStatus struct {
-	Focus       string `json:"focus"`
-	State       string `json:"state"`
-	CheckedAt   string `json:"checked_at,omitempty"`
-	GameDate    string `json:"game_date,omitempty"`
-	DaysChanged int    `json:"days_changed_since_start"`
-	Detail      string `json:"detail,omitempty"`
-	session     trainerStatus
-	lastDate    time.Time
+	Focus      string `json:"focus"`
+	State      string `json:"state"`
+	GameDate   string `json:"game_date,omitempty"`
+	LatestCopy string `json:"latest_copy,omitempty"`
+	Detail     string `json:"detail,omitempty"`
 }
 
-func nextTrainingChange(status trainerStatus, calendar trainerCalendar, focus string) (*trainerPlan, error) {
-	report, err := liveTrainingPlan(calendar, trainingPlanInput{Days: 14, Focus: focus})
-	if err != nil {
-		return nil, err
-	}
-	var week trainerInput
-	for _, row := range report.Days {
-		if len(row.Sessions) == 0 {
-			continue
-		}
-		day, _ := time.Parse(time.DateOnly, row.Date)
-		monday := trainingWeekStart(day).Format(time.DateOnly)
-		if week.Week != monday {
-			if len(week.Changes) > 0 {
-				break
-			}
-			week = trainerInput{Week: monday}
-		}
-		current, err := findTrainerWeek(calendar, monday)
-		if err != nil {
-			return nil, err
-		}
-		offset := (int(day.Weekday()) + 6) % 7
-		var codes []uint16
-		for _, name := range row.Sessions {
-			codes = append(codes, trainerSessions[name])
-		}
-		if !slices.Equal(codes, current.Days[offset]) {
-			week.Changes = append(week.Changes, trainerDayChange{Date: row.Date, Sessions: row.Sessions})
-		}
-	}
-	if len(week.Changes) == 0 {
-		return nil, nil
-	}
-	plan, err := buildTrainerPlan(status, calendar, week)
-	return &plan, err
-}
-
-func automaticTrainingTick(ctx context.Context, c trainerClient, state *automaticTrainingStatus) {
-	state.CheckedAt = time.Now().UTC().Format(time.RFC3339)
-	status, calendar, err := c.calendar(ctx, true)
-	if err != nil {
-		state.State, state.Detail = "waiting", err.Error()
-		return
-	}
-	today := calendar.Today.time()
-	if state.session.PID != 0 && (state.session != status || today.Before(state.lastDate)) {
-		state.State, state.Detail = "paused", "The FM session changed or its date moved backwards. Restart automatic training for the loaded career."
-		return
-	}
-	state.session, state.lastDate = status, today
-	state.GameDate = today.Format(time.DateOnly)
-	plan, err := nextTrainingChange(status, calendar, state.Focus)
-	if err != nil {
-		state.State, state.Detail = "waiting", err.Error()
-		return
-	}
-	if plan == nil {
-		state.State, state.Detail = "up_to_date", ""
-		return
-	}
-	if _, err := c.applyPlan(ctx, *plan); err != nil {
-		state.State, state.Detail = "paused", fmt.Sprintf("Check the live calendar before restarting automatic training: %v", err)
-		return
-	}
-	state.State, state.Detail = "applied", plan.Week
-	state.DaysChanged += len(plan.Changes)
-}
-
-func registerAutomaticTraining(ctx context.Context, server *mcp.Server, c trainerClient, mu *sync.Mutex, focus string) {
-	state := automaticTrainingStatus{Focus: focus, State: "waiting"}
-	addTool(server, "automatic_training_status", "Show automatic training's latest check, changes and any reason it is waiting or paused.", true,
+func registerAutomaticTraining(ctx context.Context, server *mcp.Server, src sources, edit editorConfig) {
+	var mu sync.Mutex
+	state := automaticTrainingStatus{Focus: edit.autoTraining, State: "waiting"}
+	addTool(server, "automatic_training_status", "Show the result of preparing training from the latest saved career revision.", true,
 		func(_ context.Context, _ struct{}) (automaticTrainingStatus, error) {
 			mu.Lock()
 			defer mu.Unlock()
 			return state, nil
 		})
-	go func() {
-		ticker := time.NewTicker(30 * time.Second)
-		defer ticker.Stop()
-		for ctx.Err() == nil {
-			mu.Lock()
-			automaticTrainingTick(ctx, c, &state)
-			paused := state.State == "paused"
-			mu.Unlock()
-			if paused {
-				return
+	go watchTrainingCopies(ctx, src, edit, func(next automaticTrainingStatus) {
+		mu.Lock()
+		defer mu.Unlock()
+		state = next
+	})
+}
+
+func watchTrainingCopies(ctx context.Context, src sources, edit editorConfig, report func(automaticTrainingStatus)) {
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+	var last os.FileInfo
+	var previous automaticTrainingStatus
+	for ctx.Err() == nil {
+		info, err := os.Stat(src.save)
+		if err != nil || last == nil || !sameSaveRevision(last, info) {
+			var out trainingCopyResult
+			if err == nil {
+				out, err = automaticTrainingCopy(ctx, src, edit)
 			}
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
+			next := automaticTrainingStatus{Focus: edit.autoTraining, GameDate: out.Date, LatestCopy: out.File}
+			switch {
+			case err != nil:
+				next.State, next.Detail = "waiting", err.Error()
+			case out.File != "":
+				next.State = "ready"
+			default:
+				next.State = "up_to_date"
+			}
+			if next != previous {
+				report(next)
+				previous = next
+			}
+			if err == nil {
+				last = info
 			}
 		}
-	}()
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func automaticTrainingCopy(ctx context.Context, src sources, edit editorConfig) (trainingCopyResult, error) {
+	s, cleanup, err := (matchSource{save: src.save, cli: src.matchCLI}).snapshot()
+	if err != nil {
+		return trainingCopyResult{}, err
+	}
+	defer cleanup()
+	club, err := s.managedClub(ctx)
+	if err != nil {
+		return trainingCopyResult{}, err
+	}
+	report, err := savedTrainingPlan(ctx, s, club, trainingPlanInput{Days: 14, Focus: edit.autoTraining})
+	if err != nil {
+		return trainingCopyResult{}, err
+	}
+	plan := trainingCopyApproval{file: "training-preview.fm", days: trainingCopyDays(report)}
+	if len(plan.days) == 0 {
+		return trainingCopyResult{Date: report.GameDate}, nil
+	}
+	stable := src
+	stable.save = s.save
+	out, err := runTrainingCopy(ctx, stable, edit, plan)
+	if err != nil || len(out.Changed) == 0 {
+		return out, err
+	}
+	plan.revision, plan.changed = out.Revision, out.Changed
+	base := strings.TrimSuffix(filepath.Base(src.save), filepath.Ext(src.save))
+	if names := []rune(base); len(names) > 28 {
+		base = string(names[:28])
+	}
+	plan.file = fmt.Sprintf("%s - Training %s %s %s.fm", base, report.GameDate, out.Revision[:12], report.Focus)
+	if info, err := os.Lstat(filepath.Join(edit.outputDir, plan.file)); err == nil && info.Mode().IsRegular() && info.Size() > 0 {
+		out.File = plan.file
+		return out, nil
+	}
+	return runTrainingCopy(ctx, src, edit, plan)
 }

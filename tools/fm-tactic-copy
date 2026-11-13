@@ -2,6 +2,7 @@
 """Write a verified, separate FM27 tactic/selection save using fmsave 0.12.2."""
 
 import argparse
+from datetime import date
 import hashlib
 import json
 import os
@@ -15,6 +16,7 @@ from fmsave import __version__
 from fmsave._container import FRAME_BASE, TRAILER_HEADER_SIZE, TRAILER_POINTER_AT, parse_directory_entry
 from fmsave._save import open_save
 from fmsave.readers.tactics import _block_starts, _read_selection_part, find_tactics_layout
+from fmsave.readers.training import _read_week, find_training_layout
 
 WIDTH = {"standard": 0, "much-wider": 1 << 50, "wider": 1 << 51,
          "narrower": 1 << 52, "much-narrower": 1 << 53}
@@ -139,6 +141,98 @@ def prepare(source, starter_uids, width, expected):
     }, (raw, index, entry, section, team, picked, before, final, selected, selectors)
 
 
+def training_copy(args):
+    require(__version__ == "0.12.2", "install fmsave 0.12.2 for this adapter")
+    require(args.save.is_file() and args.save.stat().st_size <= 512 << 20, "expected a save up to 512 MiB")
+    raw = args.save.read_bytes()
+    revision = digest(raw)
+    require(not args.revision or args.revision == revision, "save changed since preview")
+    proposed = json.load(sys.stdin)
+    require(isinstance(proposed, dict) and 0 < len(proposed) <= 14, "expected 1 to 14 training dates")
+    allowed = {0, 1, 2, 3, 5, 100, 102, 104, 105, 200, 300, 301}
+    with open_save(args.save) as save:
+        ctx = save._context
+        build = ctx.info.build
+        require(build == "27.0.1+2503222" and ctx.info.section_schemas["training_man"] == 32,
+                "this FM27 save layout is not verified for training copies")
+        today = ctx.info.game_date
+        clubs = save.managed_clubs()
+        require(len(clubs) == 1 and today is not None, "expected one managed club and a game date")
+        club = clubs[0]
+        calendars = save.training()
+        own = [r for r in calendars if r.club_uid == club.club_uid and r.team_slot == 0]
+        require(len(own) == 1, "could not find a unique first-team calendar")
+        first = own[0]
+        layout = find_training_layout(32, build)
+        index = ctx._container_index
+        entry = index.sections["training_man"]
+        with ctx.section("training_man") as body:
+            section = bytes(body)
+        modified = bytearray(section)
+        # Find each weekly record by the ordered, structurally decoded first-team calendar.
+        offsets = []
+        prefix = bytes([layout.week_lead_byte])
+        for at in range(len(section) - layout.week_name_offset):
+            if section[at:at+1] != prefix or section[at+layout.week_marker_offset] != layout.week_marker_value:
+                continue
+            if any(section[at+layout.day_blocks_offset+i*layout.day_block_bytes] != layout.day_block_lead_byte
+                   for i in range(layout.day_block_count)):
+                continue
+            try:
+                w, nxt = _read_week(section, at, layout, args.save.name)
+            except Exception:
+                continue
+            if not first.weeks or w != first.weeks[0]:
+                continue
+            trial = [at]
+            for expected in first.weeks[1:]:
+                try:
+                    w, end = _read_week(section, nxt, layout, args.save.name)
+                except Exception:
+                    break
+                if w != expected:
+                    break
+                trial.append(nxt)
+                nxt = end
+            if len(trial) == len(first.weeks):
+                offsets.append(trial)
+        require(len(offsets) == 1, "the first-team training block is missing or ambiguous")
+        planned = {}
+        for week, start in zip(first.weeks, offsets[0], strict=True):
+            all_rest = all(tuple(c.raw for c in d.sessions) == (300, 300, 300) for d in week.days)
+            for i, day in enumerate(week.days):
+                key = str(day.day)
+                if key not in proposed:
+                    continue
+                codes = proposed[key]
+                require(isinstance(codes, list) and len(codes) == 3 and all(type(c) is int and c in allowed for c in codes),
+                        "unsupported training session code")
+                require(today < date.fromisoformat(key) and (day.day - today).days <= 14, "training date is outside the next 14 days")
+                old = tuple(c.raw for c in day.sessions)
+                if all_rest or any(c in (402, 500) or c > 600 for c in old):
+                    continue
+                if old != tuple(codes):
+                    at = start + layout.day_blocks_offset + i*layout.day_block_bytes + layout.day_sessions_offset
+                    require(struct.unpack_from("<3H", section, at) == old, "training session offsets did not validate")
+                    struct.pack_into("<3H", modified, at, *codes)
+                    planned[key] = codes
+        expected_rows = {r.team_id: {str(d.day): [c.raw for c in d.sessions] for w in r.weeks for d in w.days if d.day}
+                         for r in calendars}
+        expected_rows[first.team_id].update(planned)
+    if args.output and planned:
+        with tempfile.TemporaryDirectory(dir=args.output.parent, prefix=".fm-training-") as temp:
+            staged = Path(temp) / "verified.fm"
+            staged.write_bytes(replace_frame(raw, index, entry, modified))
+            with open_save(staged) as check:
+                actual = {r.team_id: {str(d.day): [c.raw for c in d.sessions] for w in r.weeks for d in w.days if d.day}
+                          for r in check.training()}
+                require(actual == expected_rows, "training readback failed")
+            require(digest(args.save.read_bytes()) == revision, "source changed before publish")
+            os.link(staged, args.output)
+    require(digest(args.save.read_bytes()) == revision, "source changed during training check")
+    return {"revision": revision, "club": club.club_name, "changed_days": sorted(planned), "game_date": str(today)}
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--save", type=Path, required=True)
@@ -146,9 +240,14 @@ def main():
     parser.add_argument("--xi", nargs=11, type=int)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--revision")
+    parser.add_argument("--training", action="store_true")
     args = parser.parse_args()
-    require(args.width or args.xi, "request a width or starting XI")
     require(bool(args.output) == bool(args.revision), "apply requires output and preview revision")
+    if args.training:
+        require(not args.width and not args.xi, "training is a separate operation")
+        print(json.dumps(training_copy(args)))
+        return
+    require(args.width or args.xi, "request a width or starting XI")
     plan, state = prepare(args.save, args.xi, args.width, args.revision)
     if args.output:
         raw, index, entry, section, team, before_picks, before_tactics, final, selected, selectors = state

@@ -74,8 +74,10 @@ func fairCoachBrief(ctx context.Context, s matchSource, club managedClub, _ stru
 }
 
 type visiblePlayer struct {
-	Name      string   `json:"name"`
-	Positions []string `json:"positions" jsonschema:"Positions shown in FM: GK DR DC DL DM MC MR ML AMR AMC AML ST"`
+	Name         string         `json:"name"`
+	Positions    []string       `json:"positions" jsonschema:"Positions shown in FM: GK DR DC DL DM MC MR ML AMR AMC AML ST"`
+	Availability string         `json:"availability,omitempty" jsonschema:"available, rest, injured, suspended, or unregistered for the target match"`
+	RoleFit      map[string]int `json:"role_fit,omitempty" jsonschema:"Optional manager-visible role suitability 1 to 20 keyed by role name"`
 }
 
 type visibleXIInput struct {
@@ -122,6 +124,7 @@ func planVisibleXI(_ context.Context, in visibleXIInput) (tacticOutput, error) {
 	}
 	seen := make(map[string]bool, len(in.Players))
 	var squad []player
+	roleFit := make(map[uint32]map[string]int)
 	for i, row := range in.Players {
 		name := strings.TrimSpace(row.Name)
 		if name == "" || seen[fold(name)] || len(row.Positions) == 0 || len(row.Positions) > len(positions) {
@@ -136,13 +139,32 @@ func planVisibleXI(_ context.Context, in visibleXIInput) (tacticOutput, error) {
 			}
 			familiarity[code] = 20
 		}
-		squad = append(squad, player{UID: uint32(i + 1), Name: name, Positions: familiarity})
+		switch row.Availability {
+		case "", "available":
+		case "rest", "injured", "suspended", "unregistered":
+			out.Advice = append(out.Advice, name+" excluded: "+row.Availability+".")
+			continue
+		default:
+			return out, fmt.Errorf("unknown availability for %s", name)
+		}
+		uid := uint32(i + 1)
+		roleFit[uid] = make(map[string]int, len(row.RoleFit))
+		for role, fit := range row.RoleFit {
+			key := fold(role)
+			if key == "" || fit < 1 || fit > 20 || roleFit[uid][key] != 0 {
+				return out, fmt.Errorf("role fit must be 1 to 20 with distinct role names")
+			}
+			roleFit[uid][key] = fit
+		}
+		squad = append(squad, player{UID: uid, Name: name, Positions: familiarity})
 	}
-	out.XI = selectXI(squad, slots)
+	out.XI = assignXI(squad, slots, func(p player, slot slotSpec) int {
+		return roleFit[p.UID][fold(slot.role)]
+	})
 	for i := range out.XI {
 		out.XI[i].PlayerUID, out.XI[i].Fit = 0, 0
 	}
-	out.Advice = append(out.Advice, "Selections use the supplied position list. Open slots need more player options. Check availability and roles in FM.")
+	out.Advice = append(out.Advice, "Selections use the supplied positions, role ratings and availability. Open slots need more player options. Verify current eligibility in FM.")
 	return out, nil
 }
 

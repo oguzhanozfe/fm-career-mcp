@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"slices"
 	"strings"
 	"time"
 
@@ -95,80 +94,56 @@ func planTeamTraining(today time.Time, in trainingPlanInput, matches, protected,
 
 func registerTrainingPlan(server *mcp.Server, src matchSource) {
 	addSaveTool(server, src, "plan_team_training", "Plan the first team's next 1 to 14 days around the saved fixtures and travel, using a chosen tactical focus.",
-		func(ctx context.Context, s matchSource, club managedClub, in trainingPlanInput) (trainingPlanReport, error) {
-			today, err := s.gameDate(ctx)
-			if err != nil {
-				return trainingPlanReport{}, err
-			}
-			fixtures, err := s.clubFixtures(ctx, club.UID)
-			if err != nil {
-				return trainingPlanReport{}, err
-			}
-			rows, err := exportRows[savedTraining](ctx, s, "training")
-			if err != nil {
-				return trainingPlanReport{}, err
-			}
-			matches, protected, prepared := map[string]bool{}, map[string]bool{}, map[string]bool{}
-			_, _, prep, err := trainingFocus(in.Focus)
-			if err != nil {
-				return trainingPlanReport{}, err
-			}
-			prepName := strings.ToLower(strings.ReplaceAll(prep, " ", "_"))
-			for _, f := range fixtures {
-				matches[f.Date] = true
-			}
-			start := trainingWeekStart(today)
-			for _, day := range trainingDays(rows, club.UID, start, 22) {
-				for _, session := range day.Sessions {
-					if session != nil {
-						if *session == "match" {
-							matches[day.Day] = true
-						}
-						if *session == "travel" {
-							protected[day.Day] = true
-						}
-						if day.Day <= today.Format(time.DateOnly) && *session == prepName {
-							prepared[start.Format(time.DateOnly)] = true
-						}
-					}
-				}
-			}
-			return planTeamTraining(today, in, matches, protected, prepared)
-		})
+		savedTrainingPlan)
 }
 
-func liveTrainingPlan(calendar trainerCalendar, in trainingPlanInput) (trainingPlanReport, error) {
+func savedTrainingPlan(ctx context.Context, s matchSource, club managedClub, in trainingPlanInput) (trainingPlanReport, error) {
+	today, err := s.gameDate(ctx)
+	if err != nil {
+		return trainingPlanReport{}, err
+	}
+	fixtures, err := s.clubFixtures(ctx, club.UID)
+	if err != nil {
+		return trainingPlanReport{}, err
+	}
+	rows, err := exportRows[savedTraining](ctx, s, "training")
+	if err != nil {
+		return trainingPlanReport{}, err
+	}
 	matches, protected, prepared := map[string]bool{}, map[string]bool{}, map[string]bool{}
-	today := calendar.Today.time()
 	_, _, prep, err := trainingFocus(in.Focus)
 	if err != nil {
 		return trainingPlanReport{}, err
 	}
-	for offset := 1; offset <= 14; offset++ {
-		protected[today.AddDate(0, 0, offset).Format(time.DateOnly)] = true
+	prepName := strings.ToLower(strings.ReplaceAll(prep, " ", "_"))
+	for _, f := range fixtures {
+		matches[f.Date] = true
 	}
-	for _, week := range calendar.Weeks {
-		start := week.Start.time()
-		if start.IsZero() || start.Weekday() != time.Monday {
-			continue
-		}
-		valid, err := findTrainerWeek(calendar, start.Format(time.DateOnly))
-		if err != nil {
-			return trainingPlanReport{}, err
-		}
-		allRest := true
-		for _, day := range valid.Days {
-			allRest = allRest && slices.Equal(day, []uint16{300, 300, 300})
-		}
-		for i, day := range valid.Days {
-			at := start.AddDate(0, 0, i)
-			date := at.Format(time.DateOnly)
-			matches[date] = slices.Contains(day, uint16(500))
-			protected[date] = allRest || slices.ContainsFunc(day, trainerProtected)
-			if !at.After(today) && slices.Contains(day, trainerSessions[prep]) {
-				prepared[start.Format(time.DateOnly)] = true
+	start := trainingWeekStart(today)
+	for _, day := range trainingDays(rows, club.UID, start, 22) {
+		for _, session := range day.Sessions {
+			if session != nil {
+				if *session == "match" {
+					matches[day.Day] = true
+				}
+				if *session == "travel" {
+					protected[day.Day] = true
+				}
+				if day.Day <= today.Format(time.DateOnly) && *session == prepName {
+					prepared[start.Format(time.DateOnly)] = true
+				}
 			}
 		}
 	}
 	return planTeamTraining(today, in, matches, protected, prepared)
+}
+
+// Selected session identifiers from FM27 training session mapping. See the README credits..
+var trainingSessionCodes = map[string]uint16{
+	"Passing Style": 0, "Build Up": 1, "Chance Creation": 2, "In Possession Shape": 3,
+	"Line of Engagement": 4, "Pressing Intensity": 5, "Pressing Trap": 6, "Out Of Possession Shape": 7,
+	"Press Avoidance": 100, "Ball Progression": 101, "Final Third": 102, "Defensive Block": 103,
+	"Defensive Positioning": 104, "Defensive Engagement": 105, "Corners": 106, "Free Kicks": 107, "Penalties": 108,
+	"Individual Development": 200, "Rest": 300, "Recovery": 301, "Light Conditioning": 302,
+	"Conditioning": 303, "Team Bonding": 400,
 }

@@ -105,6 +105,10 @@ func buildTactic(data *playerData, in tacticInput) (tacticOutput, error) {
 
 // Keep the best unique assignment for each set of filled slots.
 func selectXI(squad []player, slots []slotSpec) []tacticSlot {
+	return assignXI(squad, slots, func(p player, _ slotSpec) int { return p.CA })
+}
+
+func assignXI(squad []player, slots []slotSpec, preference func(player, slotSpec) int) []tacticSlot {
 	type assignment struct {
 		score int
 		picks [11]int
@@ -125,7 +129,7 @@ func selectXI(squad []player, slots []slotSpec) []tacticSlot {
 				if mask&bit != 0 || fit < 10 {
 					continue
 				}
-				score := current.score + fit*50 + p.CA
+				score := current.score + fit*50 + preference(p, spec)
 				if score > states[mask|bit].score {
 					next := current
 					next.score = score

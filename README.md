@@ -7,7 +7,7 @@ A local [Model Context Protocol](https://modelcontextprotocol.io/) server for Fo
 Download the server for your platform from [Releases](https://github.com/oguzhanozfe/fm-career-mcp/releases), or build it from source with Go 1.26.5 or later.
 
 ```sh
-go install github.com/oguzhanozfe/fm-career-mcp@v0.7.0
+go install github.com/oguzhanozfe/fm-career-mcp@v0.8.0
 ```
 
 For direct `.fm` access, install the `fm_save_parser` executable from [fm-open-scout](https://github.com/YanivGabay/fm-open-scout/releases). Supply its absolute path or put it on PATH. FM24, FM26 and FM27 support depends on that parser. FM27 was exercised with real career files on macOS.
@@ -152,55 +152,30 @@ The live bridge uses game IDs from `live_squad` or `find_live_recruits`. Saved p
 
 The integration was tested against the upstream HTTP response shapes with a local fixture server. Actual Windows gameplay was not part of the release test. On macOS, match review and recruitment drafts work from local data. Native tactical changes can be exported with the template workflow below.
 
-## Optional analysis and training integrations
+## Career loop without computer use
 
-These integrations use `-mode editor`. With Bash, Git, Go and Node installed, run `./setup-fm-companions all` from the macOS or Linux release package (or `./tools/setup-fm-companions all` from the repo). It prepares the pinned Napas and MatchLens analyzers locally and installs the signed Trainer app on macOS. The editor discovers the analyzers automatically. Fair mode uses its own restricted inputs and tools. Explicit paths below also work.
+`career_turn` reads the next fixture, stored XI, latest match review and training plan from one stable save revision. `plan_visible_xi` can use manager-provided role ratings and exclude players marked injured, suspended, unregistered or rested. These reads work in fair mode.
 
-### Napas save analysis
+Editor mode can write a training schedule into a separate save on the supported FM27 layout. Configure `-save`, `-fmsave-cli`, `-tactic-copy-cli` and `-output-dir` as for save-copy workflows. Use `preview_training_copy` and `apply_training_copy` for a named copy. Add `-auto-training balanced` to check the configured source save every 15 seconds and prepare a verified copy when a completed save revision calls for different sessions. Use `automatic_training_status` to find the output. Add `-training-worker` to run the same watcher independently of a chat client and report its status to the process log. The source career is preserved. To continue in the new copy, load it in FM and update the configured source path.
 
-Build [Napas fm-mcp](https://github.com/Napas/fm-mcp) with `go build -o bin/fm-mcp ./cmd/fm-mcp` in its checkout. Add `-napas-mcp /path/to/fm-mcp` alongside your normal `-save` configuration. Each call reads a stable copy of the configured save with Napas's fog-of-war setting enabled.
-
-| Tool | Result |
-| --- | --- |
-| `saved_match_detail` | Saved events, player lines, substitutions and available team statistics |
-| `saved_player_matches` | One player's recent match lines |
-| `saved_tactic_detail` | Roles and team instructions in both possession phases |
-| `saved_role_xi` | Unique XI ranked by role suitability in both phases of the saved tactic |
-
-Role suitability comes from Napas's implementation of FM's role scoring. Check eligibility, fatigue and tactical familiarity separately. The independent save readers can use different club identifiers.
-
-### MatchLens recordings
-
-Install [FMMatchLens](https://github.com/osnsyc/FMMatchLens) on a supported Windows capture machine and use [MatchLens MCP](https://github.com/ianderse/FMMatchLens_MCP) to import the recordings with `fmmi ingest` or `fmmi sync`. Set `-matchlens-mcp /path/to/fmmi-mcp` and optionally `-matchlens-home /path/to/catalog`. The capture and analysis machines can be different if you copy the recordings and import them into the local catalog. Our MCP connects to the installed analyzer with auto-import disabled.
-
-Start with `list_match_recordings`, then pass the match and recording revision to `recorded_match_summary`, `recorded_passing_network`, `recorded_opposition_threat`, or `compare_recorded_periods`. Keep the coverage and score labels from the recording. A partial recording can contain useful evidence without containing the final result. This integration reads imported recordings. It does not install or control the capture plugin.
-
-### FM27 Trainer live calendar on macOS
-
-Install [FM27 Trainer](https://github.com/SemHiel2003/fm27-trainer), start FM with its **Start FM with module** button and open the intended career. Configure `-trainer-socket "$HOME/Library/Application Support/FM27 Trainer/agent.sock"` and `-trainer-club <live club UID>`. In a client argument array, use the expanded absolute socket path. The club UID must match the running career and can differ from the offline parser's identifier.
-
-`trainer_training_calendar` lists future weeks and the supported session names. Use `preview_live_training` for one week at a time. After reviewing the proposal, `apply_live_training` rechecks the running session, date and calendar, then writes and reads back the requested changes. Match days, travel days and past or current dates are protected. Writes require a build marked known by Trainer. Save manually in FM to keep the changes. This integration does not launch FM, capture the Tactical Effectiveness screen, or run Trainer's background replanner.
-
-Use `plan_live_training` to generate the plan from the live calendar. To have our MCP maintain it automatically, add `-auto-training balanced` to the configured Trainer flags. Other focuses are `build-up`, `chance-creation` and `pressing`. While the MCP server is running it checks every 30 seconds and applies the first changed week within the next 14 days. It skips all-rest weeks and protected days, writes only changed days, and pauses on a changed FM process, a backwards game date, or a failed write verification. Use `automatic_training_status` to check its last action. Remove the flag and restart the server to turn it off. FM still needs a manual save.
+The file-based workflow requires no computer use, live Trainer app or separate MCP server. It cannot load the copy in FM, start a match, press Continue, or receive unsaved fixture changes. The included reader and writer use the pinned fmsave Python library.
 
 ## Credits and community feedback
 
-- [FM27 Trainer by Sem Hiel](https://github.com/SemHiel2003/fm27-trainer) provides the macOS module and session mapping. The companion app is available with its MIT license and original attribution.
-- [Napas fm-mcp](https://github.com/Napas/fm-mcp) provides the detailed save decoder and phase-aware role analysis. [FMMatchLens MCP by ianderse](https://github.com/ianderse/FMMatchLens_MCP) provides recording analysis for [osnsyc's FMMatchLens](https://github.com/osnsyc/FMMatchLens). The setup script builds or installs these analyzers from their original repositories locally.
-- [rhiever's fmsave](https://github.com/rhiever/fmsave), [FootballManagerMCP](https://github.com/FootballManagerMCP/FootballManagerMCP), and [FMLibreEditor](https://github.com/tozmoz/FMLibreEditor) provide save data, Windows game actions, and editor workflows respectively.
-- Training planning addresses [reported schedule resets](https://community.sports-interactive.com/bugtracker/previous-versions/1644_football-manager-26-bugs-tracker/all-other-issues/changes-to-the-training-schedule-resets-by-the-end-of-the-current-week-r30966/) and the workload questions in the [FM27 training discussion](https://sortitoutsi.net/content/78226/optimal-training-schedules). The plan is a heuristic based on the fixture calendar and [FM27's match preparation design](https://www.footballmanager.com/fm27/features/fm27-training-and-tactical-effectiveness).
+- [FM27 Trainer by Sem Hiel](https://github.com/SemHiel2003/fm27-trainer) documented training session codes and demonstrated fixture-aware schedules.
+- [Napas fm-mcp](https://github.com/Napas/fm-mcp) demonstrated role-aware squad selection. [ianderse's MatchLens MCP](https://github.com/ianderse/FMMatchLens_MCP) and [osnsyc's FMMatchLens](https://github.com/osnsyc/FMMatchLens) demonstrated evidence-based match analysis. This workflow launches none of those projects.
+- [rhiever's fmsave](https://github.com/rhiever/fmsave) provides save data. The legacy Windows game connection uses [FootballManagerMCP](https://github.com/FootballManagerMCP/FootballManagerMCP) when explicitly configured.
+- Training planning responds to [schedule resets](https://community.sports-interactive.com/bugtracker/previous-versions/1644_football-manager-26-bugs-tracker/all-other-issues/changes-to-the-training-schedule-resets-by-the-end-of-the-current-week-r30966/). The selection inputs address [injury concerns](https://community.sports-interactive.com/forums/topic/612913-fm27-a-lot-of-injuries/) and [reported registration gaps](https://community.sports-interactive.com/forums/topic/612416-the-official-fm27-feedback-thread/page/24/).
 
 ## Feature coverage
 
 | Reference tool | Available here | Open gaps |
 | --- | --- | --- |
 | [Genie Scout](https://geniescout.com/features/) | Editor database filters, player comparison, and custom scoring and similarity from supplied scout reports | Native shortlist-file import/export, projected attributes, database-wide attribute similarity, development snapshots |
-| [FMDataLab](https://www.fmdatalab.com/) | Custom visible XI, per-90 rankings, role-weighted scout reports and role-based saved XI through Napas | League benchmarks and role optimization for arbitrary tactics supplied to this MCP |
+| [FMDataLab](https://www.fmdatalab.com/) | Custom visible XI, per-90 rankings, role-weighted scout reports and user-supplied role suitability | League benchmarks and role optimization for arbitrary tactics supplied to this MCP |
 | [FootballManagerMCP](https://github.com/FootballManagerMCP/FootballManagerMCP) | Live match and opponent analysis, tactics, scout assignments, shortlist additions, trial batches | Recruitment focus management and a verified Mac live bridge |
 | [FMRTE](https://docs.fmrte.com/) and [FMLibreEditor](https://github.com/tozmoz/FMLibreEditor) | Selected heal, holiday and tactic workflows, and staff export analysis | General player, staff, club and competition editing, reusable presets and undo |
 | [Football Manager's editor](https://www.footballmanager.com/fm27/features/fm27-2d-match-engine-game-editor-and-deeper-world-upgrades) | Selected career edits through the integrations above | Pre-game database editing and full in-game editor coverage |
-| [FM27 Trainer](https://github.com/SemHiel2003/fm27-trainer) | Read, preview, apply and maintain live Mac training around fixtures | Tactical Effectiveness OCR and individual training automation |
-| [MatchLens MCP](https://github.com/ianderse/FMMatchLens_MCP) | Recorded match summary, passing networks, opposition threat and period comparisons | Live plugin telemetry and season trends |
 
 ## Optional write tools
 

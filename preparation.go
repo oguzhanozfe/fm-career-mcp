@@ -359,6 +359,18 @@ func (s matchSource) saveInfo(ctx context.Context) (savedMetadata, error) {
 func registerPreparationTools(server *mcp.Server, src matchSource) {
 	registerPerformance(server, src)
 	registerTrainingPlan(server, src)
+	addSaveTool(server, src, "career_turn", "Read the next fixture, saved XI, latest match review and fixture-aware training plan in one call from a single save revision.",
+		func(ctx context.Context, s matchSource, club managedClub, in trainingPlanInput) (map[string]any, error) {
+			brief, err := fairCoachBrief(ctx, s, club, struct{}{})
+			if err != nil {
+				return nil, err
+			}
+			plan, err := savedTrainingPlan(ctx, s, club, in)
+			if err != nil {
+				return nil, err
+			}
+			return map[string]any{"brief": brief, "training": plan, "next_step": "Review the suggested schedule and check the starting XI. This save connection cannot advance the game."}, nil
+		})
 	addSaveTool(server, src, "fixture_plan", "List upcoming first-team fixtures with calendar-day gaps for rotation planning.",
 		func(ctx context.Context, s matchSource, c managedClub, in fixtureInput) (map[string]any, error) {
 			n, err := bounded(in.Limit, 5, 20)
