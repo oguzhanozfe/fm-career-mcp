@@ -6,13 +6,14 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const version = "0.6.0"
+const version = "0.7.0"
 
 func main() {
 	log.SetOutput(os.Stderr)
@@ -40,6 +41,7 @@ func main() {
 	flag.StringVar(&edit.matchLensHome, "matchlens-home", "", "optional MatchLens catalog home")
 	flag.StringVar(&edit.trainerSocket, "trainer-socket", "", "optional FM27 Trainer Unix socket for macOS live training")
 	flag.UintVar(&edit.trainerClub, "trainer-club", 0, "exact managed club UID allowed for live training")
+	flag.StringVar(&edit.autoTraining, "auto-training", "", "automatically maintain live training: balanced, build-up, chance-creation, or pressing")
 	flag.Parse()
 	if flag.NArg() != 0 || (*mode != "fair" && *mode != "editor") ||
 		(src.save != "" && src.playerJSON != "") ||
@@ -47,12 +49,14 @@ func main() {
 		flag.Usage()
 		os.Exit(2)
 	}
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	var server *mcp.Server
 	var err error
 	if *mode == "fair" {
 		server, err = newFairServer(src, edit)
 	} else {
+		edit.findInstalledCompanions(src)
 		if err := edit.validate(src); err != nil {
 			log.Fatal(err)
 		}
@@ -63,6 +67,29 @@ func main() {
 	}
 	if err := server.Run(ctx, &mcp.StdioTransport{}); err != nil {
 		log.Fatal(err)
+	}
+}
+
+func (e *editorConfig) findInstalledCompanions(src sources) {
+	dir := os.Getenv("FM_CAREER_COMPANIONS_DIR")
+	if dir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return
+		}
+		dir = filepath.Join(home, ".local", "share", "fm-career-mcp", "companions")
+	}
+	if src.save != "" && e.napas == "" {
+		path := filepath.Join(dir, "napas-fm-mcp")
+		if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
+			e.napas = path
+		}
+	}
+	if e.matchLens == "" {
+		path := filepath.Join(dir, "matchlens", "packages", "mcp", "bin", "fmmi-mcp.mjs")
+		if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
+			e.matchLens = path
+		}
 	}
 }
 
@@ -214,7 +241,7 @@ func newServer(ctx context.Context, src sources, edit editorConfig) (*mcp.Server
 		registerMatchLens(server, edit.matchLens, edit.matchLensHome)
 	}
 	if edit.trainerSocket != "" {
-		registerTrainer(server, trainerClient{socket: edit.trainerSocket, club: uint32(edit.trainerClub)})
+		registerTrainer(ctx, server, trainerClient{socket: edit.trainerSocket, club: uint32(edit.trainerClub)}, edit.autoTraining)
 	}
 	return server, nil
 }

@@ -69,7 +69,7 @@ esac
 		}
 	}
 	slices.Sort(names)
-	want := []string{"career_info", "coach_brief", "compare_matches", "contract_watch", "fixture_plan", "plan_visible_xi", "player_performance", "rank_scout_reports", "recent_form", "review_match", "saved_lineup", "training_calendar"}
+	want := []string{"career_info", "coach_brief", "compare_matches", "contract_watch", "fixture_plan", "plan_team_training", "plan_visible_xi", "player_performance", "rank_scout_reports", "recent_form", "review_match", "saved_lineup", "training_calendar"}
 	if !slices.Equal(names, want) {
 		t.Fatalf("unexpected fair tools: %v", names)
 	}

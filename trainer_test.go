@@ -75,8 +75,8 @@ func TestTrainerPreviewApplyAndReadBack(t *testing.T) {
 		}
 	}()
 	server := mcp.NewServer(&mcp.Implementation{Name: "test-trainer", Version: "1"}, nil)
-	registerTrainer(server, trainerClient{socket: path, club: 1869})
 	ctx := context.Background()
+	registerTrainer(ctx, server, trainerClient{socket: path, club: 1869}, "")
 	left, right := mcp.NewInMemoryTransports()
 	ss, err := server.Connect(ctx, left, nil)
 	if err != nil {
@@ -106,6 +106,7 @@ func TestTrainerPreviewApplyAndReadBack(t *testing.T) {
 	preview := callTool[trainerPlan](t, session, "preview_live_training", args("2026-07-22"))
 	drift.Store(true)
 	rejected("apply_live_training", map[string]any{"token": preview.Token})
+
 	drift.Store(false)
 	if writes.Load() != 0 {
 		t.Fatal("preview or stale approval attempted a write")
@@ -116,4 +117,23 @@ func TestTrainerPreviewApplyAndReadBack(t *testing.T) {
 		t.Fatalf("expected one verified write: %v", applied)
 	}
 	rejected("apply_live_training", map[string]any{"token": preview.Token})
+	c := trainerClient{socket: path, club: 1869}
+	state := automaticTrainingStatus{Focus: "pressing"}
+	automaticTrainingTick(ctx, c, &state)
+	if state.State != "applied" || writes.Load() != 2 || state.DaysChanged == 0 {
+		t.Fatalf("automatic plan did not apply: %+v", state)
+	}
+	automaticTrainingTick(ctx, c, &state)
+	if state.State != "up_to_date" || writes.Load() != 2 {
+		t.Fatalf("unchanged calendar was written again: %+v", state)
+	}
+	drift.Store(true)
+	automaticTrainingTick(ctx, c, &state)
+	if state.State != "paused" || writes.Load() != 3 {
+		t.Fatalf("a calendar that failed read-back must pause: %+v", state)
+	}
+	plan, err := nextTrainingChange(trainerStatus{}, trainerCalendar{Today: trainerDate{2026, 201}}, "pressing")
+	if err != nil || plan != nil {
+		t.Fatalf("missing calendar should produce no writes: %+v %v", plan, err)
+	}
 }

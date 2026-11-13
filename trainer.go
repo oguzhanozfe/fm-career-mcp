@@ -208,9 +208,12 @@ func buildTrainerPlan(status trainerStatus, calendar trainerCalendar, in trainer
 	return out, nil
 }
 
-func registerTrainer(server *mcp.Server, c trainerClient) {
+func registerTrainer(ctx context.Context, server *mcp.Server, c trainerClient, autoFocus string) {
 	var mu sync.Mutex
 	var pending approval[trainerPlan]
+	if autoFocus != "" {
+		registerAutomaticTraining(ctx, server, c, &mu, autoFocus)
+	}
 	addTool(server, "trainer_training_calendar", "Read the configured club's current live training weeks through FM27 Trainer.", true,
 		func(ctx context.Context, _ struct{}) (map[string]any, error) {
 			mu.Lock()
@@ -246,6 +249,16 @@ func registerTrainer(server *mcp.Server, c trainerClient) {
 			}
 			return plan, err
 		})
+	addTool(server, "plan_live_training", "Plan the upcoming training days from the live calendar. Use the plan to preview changes or let configured automatic training apply them.", true,
+		func(ctx context.Context, in trainingPlanInput) (trainingPlanReport, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			_, calendar, err := c.calendar(ctx, false)
+			if err != nil {
+				return trainingPlanReport{}, err
+			}
+			return liveTrainingPlan(calendar, in)
+		})
 	addTool(server, "apply_live_training", "Apply the reviewed training week and read it back. Save in FM to persist the change.", false,
 		func(ctx context.Context, in tokenInput) (map[string]any, error) {
 			mu.Lock()
@@ -254,34 +267,38 @@ func registerTrainer(server *mcp.Server, c trainerClient) {
 			if err != nil {
 				return nil, err
 			}
-			status, calendar, err := c.calendar(ctx, true)
-			if err != nil {
-				return nil, err
-			}
-			before, err := findTrainerWeek(calendar, plan.Week)
-			equalDays := func(a, b [][]uint16) bool { return slices.EqualFunc(a, b, slices.Equal[[]uint16]) }
-			if err != nil || status != plan.Status || calendar.Today != plan.Today || !equalDays(before.Days, plan.Before.Days) {
-				return nil, fmt.Errorf("the live calendar changed; preview again")
-			}
-			writeDays := slices.Clone(plan.After.Days)
-			for i := range writeDays {
-				if slices.Equal(writeDays[i], plan.Before.Days[i]) {
-					// Trainer skips a requested row containing the match code.
-					writeDays[i] = []uint16{500, 500, 500}
-				}
-			}
-			written, err := trainerRequest[struct{ Days int }](ctx, c, "set_week", map[string]any{"start": plan.After.Start, "days": writeDays})
-			if err != nil {
-				return nil, fmt.Errorf("training write returned an error; check the game before retrying: %w", err)
-			}
-			afterStatus, afterCalendar, err := c.calendar(ctx, true)
-			if err != nil {
-				return nil, fmt.Errorf("could not verify the write; check the game: %w", err)
-			}
-			after, err := findTrainerWeek(afterCalendar, plan.Week)
-			if err != nil || afterStatus != status || written.Days != len(plan.Changes) || !equalDays(after.Days, plan.After.Days) {
-				return nil, fmt.Errorf("training read-back differs from the approved plan; inspect FM before retrying")
-			}
-			return map[string]any{"applied": true, "days_changed": written.Days, "week_start": plan.Week}, nil
+			return c.applyPlan(ctx, plan)
 		})
+}
+
+func (c trainerClient) applyPlan(ctx context.Context, plan trainerPlan) (map[string]any, error) {
+	status, calendar, err := c.calendar(ctx, true)
+	if err != nil {
+		return nil, err
+	}
+	before, err := findTrainerWeek(calendar, plan.Week)
+	equalDays := func(a, b [][]uint16) bool { return slices.EqualFunc(a, b, slices.Equal[[]uint16]) }
+	if err != nil || status != plan.Status || calendar.Today != plan.Today || !equalDays(before.Days, plan.Before.Days) {
+		return nil, fmt.Errorf("the live calendar changed; preview again")
+	}
+	writeDays := slices.Clone(plan.After.Days)
+	for i := range writeDays {
+		if slices.Equal(writeDays[i], plan.Before.Days[i]) {
+			// Trainer skips a requested row containing the match code.
+			writeDays[i] = []uint16{500, 500, 500}
+		}
+	}
+	written, err := trainerRequest[struct{ Days int }](ctx, c, "set_week", map[string]any{"start": plan.After.Start, "days": writeDays})
+	if err != nil {
+		return nil, fmt.Errorf("training write returned an error; check the game before retrying: %w", err)
+	}
+	afterStatus, afterCalendar, err := c.calendar(ctx, true)
+	if err != nil {
+		return nil, fmt.Errorf("could not verify the write; check the game: %w", err)
+	}
+	after, err := findTrainerWeek(afterCalendar, plan.Week)
+	if err != nil || afterStatus != status || written.Days != len(plan.Changes) || !equalDays(after.Days, plan.After.Days) {
+		return nil, fmt.Errorf("training read-back differs from the approved plan; inspect FM before retrying")
+	}
+	return map[string]any{"applied": true, "days_changed": written.Days, "week_start": plan.Week}, nil
 }

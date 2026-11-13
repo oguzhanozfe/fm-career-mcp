@@ -29,9 +29,18 @@ type editorConfig struct {
 	napas, matchLens, matchLensHome    string
 	trainerSocket                      string
 	trainerClub                        uint
+	autoTraining                       string
 }
 
 func (e editorConfig) validate(src sources) error {
+	if e.autoTraining != "" {
+		if _, _, _, err := trainingFocus(e.autoTraining); err != nil {
+			return err
+		}
+		if e.trainerSocket == "" {
+			return fmt.Errorf("-auto-training requires -trainer-socket and -trainer-club")
+		}
+	}
 	if e.napas != "" && src.save == "" {
 		return fmt.Errorf("-napas-mcp requires -save")
 	}
