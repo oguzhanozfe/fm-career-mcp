@@ -7,7 +7,7 @@ A local [Model Context Protocol](https://modelcontextprotocol.io/) server for Fo
 Download the server for your platform from [Releases](https://github.com/oguzhanozfe/fm-career-mcp/releases), or build it from source with Go 1.26.5 or later.
 
 ```sh
-go install github.com/oguzhanozfe/fm-career-mcp@v0.3.0
+go install github.com/oguzhanozfe/fm-career-mcp@v0.3.1
 ```
 
 For direct `.fm` access, install the `fm_save_parser` executable from [fm-open-scout](https://github.com/YanivGabay/fm-open-scout/releases). Supply its absolute path or put it on PATH. FM24, FM26 and FM27 support depends on that parser. FM27 was exercised with real career files on macOS.
@@ -106,13 +106,15 @@ The first seven tools use `-save` and `-fmsave-cli`. The last three use the play
 
 ### Live FootballManagerMCP integration
 
-On Windows Steam, set up the API and game plugin from [FootballManagerMCP](https://github.com/FootballManagerMCP/FootballManagerMCP). FM Career MCP connects directly to the API on local port 5120 by default. Use the Windows server binary on the same PC as FM.
+On Windows Steam, set up the API and game plugin from [FootballManagerMCP](https://github.com/FootballManagerMCP/FootballManagerMCP). The upstream API normally listens on local port 5120. Start FM, load your career, start the upstream API and run FM Career MCP on the same PC. A port flag selects an existing API listener.
 
 ```text
 -game-api-port 5120
 ```
 
 This adds live match detail (goals, substitutions, lineup and player stats), current tactics, squad, scouting budget, player scout reports and the in-game database search for player and staff names. With the tactics screen opened once, `live_tactic_options` provides the game's valid keys. You can use just the live integration or combine it with a save snapshot.
+
+Run `live_bridge_status` to verify the connection and loaded team. The bridge also exposes `live_inbox`, `live_opponent_report` and `live_role_fit` for news, opponent analysis and the game's ratings for each position and role.
 
 Add `-game-club "Exact team name from the live API"` to enable the following:
 
@@ -141,6 +143,16 @@ Install [FM Tactics Creator](https://github.com/jamespheffernan/fm-tactics-creat
 
 `export_tactic` writes a new `.fmf` from a template you exported from FM. It supports name, mentality and tackling. The template supplies formations, roles and other instructions. Use `build_tactic` for a full plan you can enter in-game, then save that plan in FM if you want a native file. Load the generated FMF from the Tactics screen.
 
+### Width and starting XI in a save copy
+
+On macOS or Linux, install `fmsave==0.12.2` for the Python interpreter used by [tools/fm-tactic-copy](tools/fm-tactic-copy). Configure it with:
+
+```text
+-tactic-copy-cli /absolute/path/to/fm-tactic-copy -output-dir /path/to/exports
+```
+
+Use `saved_lineup` and `scout_players` to find player UIDs. `preview_tactic_copy` can set attacking width in the first saved tactic and replace the shared first-team XI. Supply all 11 UIDs in that tactic's stored slot order for an XI change. `apply_tactic_copy` verifies the new file and requires an unchanged source revision and an unused output name. The adapter has been checked on FM27 build `27.0.1+2503222`. Load the resulting file in FM and check the active tactic and player eligibility. This workflow edits a separate file on disk and has no live connection to FM.
+
 ### Player holiday return
 
 Add `-holiday-copies -output-dir /path/to/exports` alongside `-save`. Call `preview_holiday_return` with the club identifier and the desired name for a new save, then `apply_holiday_return` with the preview token. Load the resulting copy in FM. The original save is preserved. Use an existing local output directory that supports hard links.
@@ -167,7 +179,7 @@ The adapter requires the bridge's structural checks and a readable loaded-save c
 
 The MCP server uses local stdio and offers tools based on the inputs and adapters configured at startup. Snapshots drive reports and advice. The FMF writer and live editor run as separate programs with fixed arguments. Holiday edits work on a copy of the selected save. No model credentials or Steam credentials are required by the server. If your client uses a cloud model, it may send tool responses to that model provider.
 
-Further live work includes submitting and tracking normal transfer bids and employment offers, plus a macOS equivalent of the Windows match and tactics bridge. These require game actions that can be verified on the target version and save.
+For comparisons, [Napas/fm-mcp](https://github.com/Napas/fm-mcp) reads richer squad and match details from saved careers, [FM27 Trainer](https://github.com/SemHiel2003/fm27-trainer) connects to the game to work with the training calendar, and [FMMatchLens MCP](https://github.com/ianderse/FMMatchLens_MCP) analyses recordings from its game plugin. Each uses a different source. Further live work includes macOS save and tactic commands, training changes, normal transfer and contract offers, and match event analysis. Each needs a verified game-side operation or source on the target platform.
 
 ## Development
 

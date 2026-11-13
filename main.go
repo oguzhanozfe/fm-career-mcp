@@ -12,7 +12,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const version = "0.3.0"
+const version = "0.3.1"
 
 func main() {
 	log.SetOutput(os.Stderr)
@@ -23,6 +23,7 @@ func main() {
 	flag.StringVar(&src.playerJSON, "players-json", "", "pre-extracted fm_save_parser JSON")
 	flag.StringVar(&src.staffJSON, "staff-json", "", "FMLibreEditor staff JSON export")
 	flag.StringVar(&edit.tactics, "tactics-cli", "", "optional fm-tactics executable")
+	flag.StringVar(&edit.tacticCopyCLI, "tactic-copy-cli", "", "optional FM27 save-copy adapter for width and starting XI")
 	flag.StringVar(&edit.template, "tactic-template", "", "native FMF template for export_tactic")
 	flag.StringVar(&edit.outputDir, "output-dir", "", "directory for generated FMF tactics and holiday save copies")
 	flag.StringVar(&edit.live, "live-editor", "", "optional FM Career live editor adapter executable")

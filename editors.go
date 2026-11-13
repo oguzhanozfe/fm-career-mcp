@@ -20,6 +20,7 @@ import (
 
 type editorConfig struct {
 	tactics, template, outputDir, live string
+	tacticCopyCLI                      string
 	pid, club                          uint
 	holidays                           bool
 	allowUnknown                       bool
@@ -40,7 +41,10 @@ func (e editorConfig) validate(src sources) error {
 	if e.holidays && src.save == "" {
 		return fmt.Errorf("-holiday-copies requires -save")
 	}
-	if e.holidays || e.tactics != "" {
+	if e.tacticCopyCLI != "" && src.save == "" {
+		return fmt.Errorf("-tactic-copy-cli requires -save")
+	}
+	if e.holidays || e.tactics != "" || e.tacticCopyCLI != "" {
 		if info, err := os.Stat(e.outputDir); err != nil || !info.IsDir() {
 			return fmt.Errorf("configure an existing -output-dir")
 		}
@@ -182,6 +186,9 @@ func (e editorConfig) health(ctx context.Context, mode string, expected []byte) 
 }
 
 func registerEditors(server *mcp.Server, src sources, edit editorConfig) {
+	if edit.tacticCopyCLI != "" {
+		registerTacticCopies(server, src, edit)
+	}
 	if edit.tactics != "" {
 		addTool(server, "export_tactic", "Write a new local FMF variant of the configured template. Changes the name, mentality and tackling only.", false, edit.exportTactic)
 	}

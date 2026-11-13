@@ -1,0 +1,183 @@
+#!/usr/bin/env python3
+"""Write a verified, separate FM27 tactic/selection save using fmsave 0.12.2."""
+
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import struct
+import sys
+import tempfile
+
+from backports import zstd
+from fmsave import __version__
+from fmsave._container import FRAME_BASE, TRAILER_HEADER_SIZE, TRAILER_POINTER_AT, parse_directory_entry
+from fmsave._save import open_save
+from fmsave.readers.tactics import _block_starts, _read_selection_part, find_tactics_layout
+
+WIDTH = {"standard": 0, "much-wider": 1 << 50, "wider": 1 << 51,
+         "narrower": 1 << 52, "much-narrower": 1 << 53}
+WIDTH_MASK = sum(WIDTH.values())
+MISSING = 0xFFFFFFFF
+
+
+def require(ok, message):
+    if not ok:
+        raise ValueError(message)
+
+
+def digest(raw):
+    return hashlib.sha256(raw).hexdigest()
+
+
+def rows(save, table, team):
+    return [row for row in getattr(save, table)().to_dicts()
+            if row["team_id"] == team and row["team_slot"] == 0]
+
+
+def replace_frame(raw, index, entry, section):
+    frame = zstd.compress(section)
+    shift = len(frame) - entry.compressed_size
+    trailer = index.trailer_offset
+    payload = bytearray(zstd.decompress(raw[trailer + TRAILER_HEADER_SIZE:]))
+    cursor = 8 + struct.unpack_from("<I", payload)[0]
+    count = 0
+    while parsed := parse_directory_entry(payload, cursor):
+        other, cursor = parsed
+        count += 1
+        field = cursor - 40
+        if other == entry:
+            struct.pack_into("<Q", payload, field + 8, len(frame))
+        elif other.frame_offset > entry.frame_offset:
+            struct.pack_into("<Q", payload, field, other.frame_offset - FRAME_BASE + shift)
+    require(count == len(index.entries), "archive directory did not validate")
+    out = bytearray(raw[:entry.frame_offset] + frame
+                    + raw[entry.frame_end:trailer + TRAILER_HEADER_SIZE] + zstd.compress(payload))
+    struct.pack_into("<Q", out, TRAILER_POINTER_AT, trailer + shift - TRAILER_POINTER_AT)
+    return out
+
+
+def prepare(source, starter_uids, width, expected):
+    require(__version__ == "0.12.2", "install fmsave 0.12.2 for this adapter")
+    require(source.is_file() and source.stat().st_size <= 512 << 20, "expected a save up to 512 MiB")
+    raw = source.read_bytes()
+    revision = digest(raw)
+    require(not expected or expected == revision, "save changed since preview")
+    with open_save(source) as save:
+        ctx = save._context
+        build = ctx.info.build
+        require(build == "27.0.1+2503222" and ctx.info.section_schemas["tactics_man"] == 26,
+                "this FM27 build has not been verified for tactic copies")
+        clubs = save.managed_clubs()
+        require(len(clubs) == 1, "expected one managed club")
+        club = clubs[0]
+        tactics = [r for r in save.tactics().to_dicts() if r["club_uid"] == club.club_uid
+                   and r["team_slot"] == 0 and r["index"] == 0]
+        require(len(tactics) == 1, "could not identify the first tactic of the managed first team")
+        tactic = tactics[0]
+        team = tactic["team_id"]
+        layout = find_tactics_layout(26, build)
+        require((layout.slot_count, layout.selection_slot_count) == (11, 26), "unsupported selection layout")
+        index = ctx._container_index
+        entry = index.sections["tactics_man"]
+        with ctx.section("tactics_man") as body:
+            section = bytearray(body)
+        team_at = _block_starts(section, [team], layout).get(team)
+        require(team_at is not None, "first-team selection block is ambiguous or missing")
+        selection = _read_selection_part(bytes(section), team_at, len(section), layout, source.name)
+        require(1 <= selection.tactic_count <= 3, "unsupported number of saved tactics")
+        slots_at = team_at + 4 + len(layout.block_marker)
+        slots_at += 4 + struct.unpack_from("<I", section, slots_at)[0]
+        original = list(struct.unpack_from("<26I", section, slots_at))
+        records = ctx.player_records()
+        selectors = {i + 1: records.uids[p] for i, p in records.position_by_pindex.items()}
+        picked = rows(save, "selections", team)
+        observed = {r["slot"] + (11 if r["substitute"] else 0): r["player_uid"] for r in picked}
+        require(observed == {i: selectors.get(key) for i, key in enumerate(original) if key != MISSING},
+                "raw selection differs from the save reader")
+        selected = None
+        if starter_uids:
+            require(len(starter_uids) == 11 and len(set(starter_uids)) == 11, "provide 11 distinct player UIDs")
+            players = {p.uid: p.name for p in save.players()
+                       if p.club_uid == club.club_uid and p.uid in starter_uids}
+            require(set(players) == set(starter_uids), "all starters must belong to the managed club")
+            reverse = {uid: selector for selector, uid in selectors.items() if uid in players}
+            require(len(reverse) == 11, "could not resolve all starter IDs")
+            starters = [reverse[uid] for uid in starter_uids]
+            bench = original[11:]
+            used = set(starters) | set(bench)
+            outgoing = iter(key for key in original[:11] if key != MISSING and key not in used)
+            bench = [next(outgoing, MISSING) if key in starters else key for key in bench]
+            selected = starters + bench
+            filled = [key for key in selected if key != MISSING]
+            require(len(filled) == len(set(filled)), "the resulting selection contains duplicates")
+            struct.pack_into("<26I", section, slots_at, *selected)
+        name = tactic["name"].encode()
+        name_at = selection.end + 8
+        require(section[selection.end:selection.end + 3] == bytes.fromhex("224400")
+                and section[name_at:name_at + 4 + len(name)] == struct.pack("<I", len(name)) + name,
+                "first tactic did not match the save reader")
+        options_at = name_at + 4 + len(name) + 12
+        header = section[options_at:options_at + 19]
+        require(header == bytes(tactic["unknown"][f"team_instruction_{i:02}"] for i in range(19))
+                and header[3:6] == bytes((7, 2, 3)) and header[18] == 255,
+                "tactic instruction layout did not validate")
+        bits = int.from_bytes(header[6:18], "little")
+        old = next((key for key, val in WIDTH.items() if val == bits & WIDTH_MASK), None)
+        require(old is not None, "ambiguous saved width")
+        final = (bits & ~WIDTH_MASK) | WIDTH[width] if width else bits
+        section[options_at + 6:options_at + 18] = final.to_bytes(12, "little")
+        before = rows(save, "tactics", team)
+        require(len(before) == selection.tactic_count and len(tactic["slots"]) == 11,
+                "not all first-team tactics could be read")
+    require(digest(source.read_bytes()) == revision, "source changed while reading")
+    return {
+        "revision": revision, "club": club.club_name, "tactic": tactic["name"],
+        "width_before": old, "width_after": width or old,
+        "starter_uids": starter_uids,
+    }, (raw, index, entry, section, team, picked, before, final, selected, selectors)
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--save", type=Path, required=True)
+    parser.add_argument("--width", choices=WIDTH)
+    parser.add_argument("--xi", nargs=11, type=int)
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--revision")
+    args = parser.parse_args()
+    require(args.width or args.xi, "request a width or starting XI")
+    require(bool(args.output) == bool(args.revision), "apply requires output and preview revision")
+    plan, state = prepare(args.save, args.xi, args.width, args.revision)
+    if args.output:
+        raw, index, entry, section, team, before_picks, before_tactics, final, selected, selectors = state
+        with tempfile.TemporaryDirectory(dir=args.output.parent, prefix=".fm-tactic-") as temp:
+            staged = Path(temp) / "verified.fm"
+            staged.write_bytes(replace_frame(raw, index, entry, section))
+            with open_save(staged) as check:
+                picks = rows(check, "selections", team)
+                tactics = rows(check, "tactics", team)
+                if args.xi:
+                    actual = {r["slot"] + (11 if r["substitute"] else 0): r["player_uid"] for r in picks}
+                    expected_picks = {i: selectors.get(key) for i, key in enumerate(selected) if key != MISSING}
+                    require(actual == expected_picks, "selection readback failed")
+                else:
+                    require(picks == before_picks, "selection changed unexpectedly")
+                require(len(tactics) == len(before_tactics) and tactics[1:] == before_tactics[1:],
+                        "other tactics changed unexpectedly")
+                expected_tactic = before_tactics[0]
+                instructions = final.to_bytes(12, "little")
+                for i, byte in enumerate(instructions, 6):
+                    expected_tactic["unknown"][f"team_instruction_{i:02}"] = byte
+                require(tactics[0] == expected_tactic, "tactic readback failed")
+            require(digest(args.save.read_bytes()) == args.revision, "source changed before publish")
+            os.link(staged, args.output)
+    print(json.dumps(plan))
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (ValueError, OSError, KeyError, struct.error) as error:
+        sys.exit(str(error))

@@ -68,6 +68,21 @@ func TestGameBridgeThroughMCP(t *testing.T) {
 			fmt.Fprint(w, `{"summary":{"date":"2026-07-04","opponent":"Town","goalsFor":1,"goalsAgainst":2},"teamStats":{"expectedGoals":0.7,"shots":12,"longShots":7},"opponentStats":{"expectedGoals":1.9,"shots":8},"substitutions":[]}`)
 		case "/api/v1/tactics/options":
 			fmt.Fprint(w, `{"mentalities":[{"key":"Positive"}]}`)
+		case "/api/v1/tactics/role-fit":
+			q := r.URL.Query()
+			if q.Get("position") != "DM" || q.Get("inPossession") != "false" || q.Get("top") != "4" {
+				http.Error(w, "unexpected role filters", http.StatusBadRequest)
+				return
+			}
+			fmt.Fprint(w, `{"roles":[{"role":"Screening Defensive Midfielder"}]}`)
+		case "/api/v1/inbox":
+			if r.URL.Query().Get("unreadOnly") != "true" {
+				http.Error(w, "expected unread filter", http.StatusBadRequest)
+				return
+			}
+			fmt.Fprint(w, `{"messages":[]}`)
+		case "/api/v1/teams/Górnik Zabrze":
+			fmt.Fprint(w, `{"name":"Górnik Zabrze"}`)
 		case "/api/v1/tactics":
 			if r.Method == http.MethodGet {
 				if changed.Load() {
@@ -133,6 +148,22 @@ func TestGameBridgeThroughMCP(t *testing.T) {
 	options := callTool[map[string]any](t, session, "live_tactic_options", nil)
 	if options["mentalities"] == nil {
 		t.Fatal("missing tactic options")
+	}
+	status := callTool[map[string]any](t, session, "live_bridge_status", nil)
+	if status["connected"] != true || status["writes_configured_for_current_team"] != true {
+		t.Fatalf("unexpected bridge status: %+v", status)
+	}
+	inbox := callTool[map[string]any](t, session, "live_inbox", map[string]any{"unread_only": true})
+	if inbox["messages"] == nil {
+		t.Fatal("missing inbox")
+	}
+	opponent := callTool[map[string]any](t, session, "live_opponent_report", map[string]any{"team": "Górnik Zabrze"})
+	if opponent["name"] != "Górnik Zabrze" {
+		t.Fatalf("unexpected opponent: %+v", opponent)
+	}
+	roles := callTool[map[string]any](t, session, "live_role_fit", map[string]any{"position": "dm", "phase": "out_of_possession", "top": 4})
+	if roles["roles"] == nil {
+		t.Fatal("missing role fit")
 	}
 	args := map[string]any{"slot": 2, "mentality": "Positive"}
 	preview := callTool[bridgePreview](t, session, "preview_live_tactic", args)

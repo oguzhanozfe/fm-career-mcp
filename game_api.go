@@ -340,6 +340,20 @@ func jsonObject(raw json.RawMessage) (map[string]any, error) {
 }
 
 func registerGameAPI(server *mcp.Server, g *gameAPI) {
+	addTool(server, "live_bridge_status", "Check whether the configured local FootballManagerMCP port can read the current squad.", true,
+		func(ctx context.Context, _ struct{}) (map[string]any, error) {
+			ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			var squad struct{ TeamName string }
+			if err := g.request(ctx, http.MethodGet, "squad", nil, &squad); err != nil {
+				return map[string]any{"connected": false, "detail": err.Error()}, nil
+			}
+			if strings.TrimSpace(squad.TeamName) == "" {
+				return map[string]any{"connected": false, "detail": "The bridge did not identify a loaded squad."}, nil
+			}
+			return map[string]any{"connected": true, "team": squad.TeamName, "writes_configured_for_current_team": g.club != "" && fold(squad.TeamName) == g.club}, nil
+		})
+	registerLiveReads(server, g)
 	addTool(server, "live_match_detail", "Read both teams' stats, goals, substitutions and lineup for a played match from FootballManagerMCP.", true,
 		func(ctx context.Context, in matchInput) (map[string]any, error) {
 			raw, err := g.matchDetail(ctx, in)
