@@ -4,17 +4,28 @@ A local [Model Context Protocol](https://modelcontextprotocol.io/) server for Fo
 
 ## Install
 
-Download the server for your platform from [Releases](https://github.com/oguzhanozfe/fm-career-mcp/releases), or build it with Go 1.26.5 or later.
+Download the server for your platform from [Releases](https://github.com/oguzhanozfe/fm-career-mcp/releases), or build it from source with Go 1.26.5 or later.
 
 ```sh
-go install github.com/oguzhanozfe/fm-career-mcp@v0.2.1
+go install github.com/oguzhanozfe/fm-career-mcp@v0.3.0
 ```
 
 For direct `.fm` access, install the `fm_save_parser` executable from [fm-open-scout](https://github.com/YanivGabay/fm-open-scout/releases). Supply its absolute path or put it on PATH. FM24, FM26 and FM27 support depends on that parser. FM27 was exercised with real career files on macOS.
 
 ## Connect to your career
 
-Save your career in FM, then add this server to your MCP client's local stdio configuration. Replace the example paths with your own.
+Save your career in FM, then register the same local stdio server in Codex and Claude Code. Replace the example paths with your own. Install [fmsave](https://github.com/rhiever/fmsave) for the next-match and post-match workflows.
+
+```sh
+codex mcp add fm-career -- /absolute/path/to/fm-career-mcp \
+  -save "/absolute/path/to/My Career.fm" -parser /absolute/path/to/fm_save_parser \
+  -fmsave-cli /absolute/path/to/fmsave
+claude mcp add --scope user --transport stdio fm-career -- /absolute/path/to/fm-career-mcp \
+  -save "/absolute/path/to/My Career.fm" -parser /absolute/path/to/fm_save_parser \
+  -fmsave-cli /absolute/path/to/fmsave
+```
+
+For [Claude Desktop](https://modelcontextprotocol.io/docs/develop/connect-local-servers), add the entry to `claude_desktop_config.json` and restart the app.
 
 ```json
 {
@@ -23,7 +34,8 @@ Save your career in FM, then add this server to your MCP client's local stdio co
       "command": "/absolute/path/to/fm-career-mcp",
       "args": [
         "-save", "/absolute/path/to/My Career.fm",
-        "-parser", "/absolute/path/to/fm_save_parser"
+        "-parser", "/absolute/path/to/fm_save_parser",
+        "-fmsave-cli", "/absolute/path/to/fmsave"
       ]
     }
   }
@@ -43,7 +55,7 @@ Optional inputs:
 - Use `-players-json /path/to/players.json` in place of `-save` to read a snapshot previously generated with `fm_save_parser players "My Career.fm" --top 0 --json players.json`.
 - Use `-staff-json /path/to/staff.json` with a Staff → Export → JSON export from [FMLibreEditor](https://github.com/tozmoz/FMLibreEditor). Include the entire staff group you want to audit. Staff-only mode works by providing just this flag.
 
-The server loads a snapshot on startup. After you save the game or re-export staff, ask your client to call `reload_career`. Save club identifiers come from `find_clubs`. For live tools, obtain the real club UID separately from the FMLibreEditor club profile.
+The server checks the configured save for changes before using its cached player data and reloads it after a completed write. `career_info` reports the file name, write time and in-game date, and flags the last readable revision if refresh fails. `coach_brief` and `review_match` read a fresh, stable copy for their reports. Use `reload_career` after re-exporting staff or player JSON. When using Save As, update the configured save path in the client. The file workflow reads saves written by FM, including autosaves at the configured path. It cannot issue a Save Game command to FM. Save club identifiers come from `find_clubs`. For live tools, obtain the real club UID separately from the FMLibreEditor club profile.
 
 ## Analysis tools
 
@@ -55,6 +67,7 @@ The server loads a snapshot on startup. After you save the game or re-export sta
 | `squad_review` | Positional depth, loans and an optional shortlist with strict CA **and** PA cutoffs |
 | `scout_players` | Filter by position, age, ability, wage and an unverified stored value |
 | `build_tactic` | In-possession and out-of-possession shapes, team instructions, an XI with no duplicate players and advice on weak positions |
+| `coach_brief` | Next fixtures, last-match review, saved tactic slots and a proposed XI from one save snapshot |
 | `staff_audit` | Staff attributes and vacancies against the headcounts you supply |
 | `review_match` | Played match analysis with the evidence, suggested changes and what to measure next |
 | `search_staff_candidates` | Rank staff by the relevant coaching, recruitment or medical attributes |
@@ -64,9 +77,30 @@ Try “Build a high press for my club and find young replacements for the positi
 
 Squad depth counts familiarity of at least 15 out of 20. The proposed XI uses position familiarity and CA. Check fitness, suspensions, registration and role suitability in FM. Scouting figures marked unverified have uncertain meaning. For players on loan, wage filters use the permanent contract at the parent club when available. The staff export supplies employees and roles, while your club's Staff screen supplies the allowed headcounts. Export filters and matching club names can affect the staff totals.
 
+## More tools for match preparation
+
+| Tool | Result |
+| --- | --- |
+| `fixture_plan` | Upcoming fixtures and calendar-day gaps for rotation |
+| `recent_form` | Recent results, goals, xG per shot and the share of shots from distance, with report coverage |
+| `compare_matches` | Before-and-after match statistics for a tactical experiment |
+| `saved_lineup` | Saved starters, bench and unfilled slots |
+| `training_calendar` | Saved first-team training sessions for the next 1–28 days |
+| `contract_watch` | Permanent contracts expiring within a chosen window |
+| `finance_history` | Monthly budget and payroll snapshots in the save's units |
+| `compare_players` | Positional ratings, CA, PA and saved wages for two to five players |
+| `depth_gaps` | Positions in a chosen shape without enough options for one backup |
+| `draft_loan` | Proposed wage contribution, fees and estimated total against your ceiling |
+
+The first seven tools use `-save` and `-fmsave-cli`. The last three use the player snapshot. Finance rows are historical. A loan draft uses terms you supply and cannot retrieve a club's private demands or send an offer.
+
 ## Assistant-coach workflows
 
+**Prepare for the next match.** Ask “Who are we playing next? Keep my 4-2-3-1, rest Fred and give me one adjustment based on the last match.” With `-save` and `-fmsave-cli`, `coach_brief` reads the latest completed save on each call and accepts a tactical style and optional player exclusions. It reports the saved tactic slots and gives a separate XI proposal using the available positional ratings and CA. Use `squad_review` to resolve player UIDs. Check the active slot, fitness, suspensions and registration in FM before selecting the team.
+
 **Review the last match.** Add `-fmsave-cli /path/to/fmsave` alongside `-save`. Install [fmsave](https://github.com/rhiever/fmsave) as a separate CLI. The server reads the managed club’s latest played first-team fixture by default. Its match exports share a temporary snapshot so an autosave cannot mix records from different versions of the career. If the save has both teams' match stats, it uses them for chance-quality analysis. On FM27 builds where team stats cannot be decoded, it uses readable player ratings and passing stats. You can also supply both teams' xG, shots and possession from the FM match screen directly to `review_match`. A score alone does not establish a tactical cause.
+
+**Match-report compatibility.** The release includes `fmsave-fm27`, a macOS/Linux helper for the match-report layout tested on FM27 build `27.0.1+2503222`. Install `fmsave==0.12.2` under Python 3.12 or later, make that interpreter available as `python3`, then pass the helper's absolute path to `-fmsave-cli`. If you used a virtual environment, put its `bin` folder on the client's PATH or set the helper's first line to that environment's Python path. Other builds use fmsave's regular checks. The helper checks every report's framing before returning compatible rows.
 
 **Recruit players and staff.** Use `scout_players` for players and `search_staff_candidates` for staff. For outside staff, export an unfiltered staff list from FMLibreEditor. The staff score is an average of role-relevant attributes. It does not establish a candidate's interest or wage demand. Pass an explicit fee, wage, duration and any applicable budgets to `draft_recruitment_offer` for a draft you can enter in FM. The draft does not submit a transfer bid or staff employment offer.
 

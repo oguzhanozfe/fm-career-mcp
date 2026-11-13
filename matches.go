@@ -147,6 +147,7 @@ func value(v *int) int {
 type matchSource struct {
 	cli, save string
 	live      *gameAPI
+	revision  os.FileInfo
 }
 
 func (s matchSource) review(ctx context.Context, in matchInput) (matchReview, error) {
@@ -222,6 +223,7 @@ func (s matchSource) snapshot() (matchSource, func(), error) {
 		return s, nil, fmt.Errorf("could not snapshot the save; retry after FM finishes saving")
 	}
 	s.save = snapshot
+	s.revision = opened
 	return s, cleanup, nil
 }
 
@@ -247,6 +249,7 @@ type savedFixture struct {
 	HomeGoals *int   `json:"home_goals"`
 	AwayGoals *int   `json:"away_goals"`
 	Played    bool   `json:"played"`
+	Neutral   bool   `json:"is_neutral_venue"`
 	HomeSlot  *int   `json:"home_team_slot"`
 	AwaySlot  *int   `json:"away_team_slot"`
 }
@@ -282,37 +285,68 @@ type savedPlayerMatch struct {
 }
 
 type managedClub struct {
-	UID uint32 `json:"club_uid"`
+	UID  uint32 `json:"club_uid"`
+	Name string `json:"club_name"`
 }
 
 func (s matchSource) savedMatch(ctx context.Context, in matchInput) (matchRecord, []string, error) {
+	_, fixtures, err := s.firstTeamFixtures(ctx)
+	if err != nil {
+		return matchRecord{}, nil, err
+	}
+	return s.reviewSavedFixture(ctx, fixtures, in)
+}
+
+func (s matchSource) firstTeamFixtures(ctx context.Context) (managedClub, []savedFixture, error) {
+	club, err := s.managedClub(ctx)
+	if err != nil {
+		return managedClub{}, nil, err
+	}
+	fixtures, err := s.clubFixtures(ctx, club.UID)
+	return club, fixtures, err
+}
+
+func (s matchSource) managedClub(ctx context.Context) (managedClub, error) {
 	clubs, err := exportRows[managedClub](ctx, s, "managed-clubs")
 	if err != nil {
-		return matchRecord{}, nil, err
+		return managedClub{}, err
 	}
 	if len(clubs) != 1 || clubs[0].UID == 0 {
-		return matchRecord{}, nil, fmt.Errorf("one managed club is required for saved match review")
+		return managedClub{}, fmt.Errorf("one managed club is required for saved career tools")
 	}
+	return clubs[0], nil
+}
+
+func (s matchSource) clubFixtures(ctx context.Context, uid uint32) ([]savedFixture, error) {
 	fixtures, err := exportRows[savedFixture](ctx, s, "fixtures")
 	if err != nil {
-		return matchRecord{}, nil, err
+		return nil, err
 	}
-	query := fold(in.Opponent)
 	rows := fixtures[:0]
 	for _, f := range fixtures {
-		f.HomeOwn = f.HomeClub == clubs[0].UID
-		awayOwn := f.AwayClub == clubs[0].UID
-		if !f.Played || f.Date == "" || f.HomeOwn == awayOwn || in.Date != "" && f.Date != in.Date {
+		f.HomeOwn = f.HomeClub == uid
+		awayOwn := f.AwayClub == uid
+		if f.Date == "" || f.HomeOwn == awayOwn {
 			continue
 		}
-		opp, slot := f.HomeName, f.AwaySlot
+		slot := f.AwaySlot
 		if f.HomeOwn {
-			opp, slot = f.AwayName, f.HomeSlot
+			slot = f.HomeSlot
 		}
-		if slot == nil || *slot != 0 || !strings.Contains(fold(opp), query) {
-			continue
+		if slot != nil && *slot == 0 {
+			rows = append(rows, f)
 		}
-		rows = append(rows, f)
+	}
+	return rows, nil
+}
+
+func (s matchSource) reviewSavedFixture(ctx context.Context, fixtures []savedFixture, in matchInput) (matchRecord, []string, error) {
+	query := fold(in.Opponent)
+	var rows []savedFixture
+	for _, f := range fixtures {
+		if f.Played && (in.Date == "" || f.Date == in.Date) && strings.Contains(fold(f.opponent()), query) {
+			rows = append(rows, f)
+		}
 	}
 	if len(rows) == 0 {
 		return matchRecord{}, nil, fmt.Errorf("no matching played first-team fixture in the saved career")
@@ -322,17 +356,41 @@ func (s matchSource) savedMatch(ctx context.Context, in matchInput) (matchRecord
 	if len(rows) > 1 && rows[1].Date == f.Date {
 		return matchRecord{}, nil, fmt.Errorf("more than one fixture on that date; specify the opponent")
 	}
-	out := matchRecord{Date: f.Date, Opponent: f.HomeName, Venue: "away", Source: "saved_fixture"}
-	own, other := f.Away, f.Home
-	out.For.Goals, out.Against.Goals = f.AwayGoals, f.HomeGoals
-	if f.HomeOwn {
-		own, other = other, own
-		out.Opponent, out.Venue = f.AwayName, "home"
-		out.For.Goals, out.Against.Goals = f.HomeGoals, f.AwayGoals
-	}
+	_, other := f.teams()
 	stats, err := exportRows[savedStats](ctx, s, "team-match-stats")
 	if err != nil {
-		return s.withPlayerStats(ctx, f, other, out, "This save build did not yield team match statistics.")
+		return s.withPlayerStats(ctx, f, other, f.report(nil), "This save build did not yield team match statistics.")
+	}
+	out := f.report(stats)
+	if out.Source != "saved_match_report" {
+		return s.withPlayerStats(ctx, f, other, out, "The save has no unique pair of team statistics for this fixture.")
+	}
+	return out, nil, nil
+}
+
+func (f savedFixture) teams() (own, other int) {
+	if f.HomeOwn {
+		return f.Home, f.Away
+	}
+	return f.Away, f.Home
+}
+
+func (f savedFixture) venue() string {
+	if f.Neutral {
+		return "neutral"
+	}
+	if f.HomeOwn {
+		return "home"
+	}
+	return "away"
+}
+
+func (f savedFixture) report(stats []savedStats) matchRecord {
+	out := matchRecord{Date: f.Date, Opponent: f.opponent(), Venue: f.venue(), Source: "saved_fixture"}
+	own, other := f.teams()
+	out.For.Goals, out.Against.Goals = f.AwayGoals, f.HomeGoals
+	if f.HomeOwn {
+		out.For.Goals, out.Against.Goals = f.HomeGoals, f.AwayGoals
 	}
 	var ownRows, otherRows []savedStats
 	for _, row := range stats {
@@ -347,11 +405,17 @@ func (s matchSource) savedMatch(ctx context.Context, in matchInput) (matchRecord
 			otherRows = append(otherRows, row)
 		}
 	}
-	if len(ownRows) != 1 || len(otherRows) != 1 {
-		return s.withPlayerStats(ctx, f, other, out, "The save has no unique pair of team statistics for this fixture.")
+	if len(ownRows) == 1 && len(otherRows) == 1 {
+		out.For, out.Against, out.Source = ownRows[0].side(out.For.Goals), otherRows[0].side(out.Against.Goals), "saved_match_report"
 	}
-	out.For, out.Against, out.Source = ownRows[0].side(out.For.Goals), otherRows[0].side(out.Against.Goals), "saved_match_report"
-	return out, nil, nil
+	return out
+}
+
+func (f savedFixture) opponent() string {
+	if f.HomeOwn {
+		return f.AwayName
+	}
+	return f.HomeName
 }
 
 func (s matchSource) withPlayerStats(ctx context.Context, f savedFixture, opponent int, out matchRecord, note string) (matchRecord, []string, error) {

@@ -7,8 +7,9 @@ import (
 )
 
 type tacticInput struct {
-	ClubUID uint32 `json:"club_uid" jsonschema:"Club UID from find_clubs"`
-	Style   string `json:"style,omitempty" jsonschema:"balanced, press, or counter; defaults to balanced"`
+	ClubUID uint32   `json:"club_uid" jsonschema:"Club UID from find_clubs"`
+	Style   string   `json:"style,omitempty" jsonschema:"balanced, press, or counter; defaults to balanced"`
+	Exclude []uint32 `json:"exclude_player_uids,omitempty" jsonschema:"Club player UIDs to rest or leave out of the XI"`
 }
 
 type tacticSlot struct {
@@ -60,12 +61,16 @@ func buildTactic(data *playerData, in tacticInput) (tacticOutput, error) {
 		return out, fmt.Errorf("style must be balanced, press, or counter")
 	}
 	var squad []player
+	found := false
 	for _, p := range data.Players {
 		if p.UID != 0 && p.Club != nil && p.Club.UID == in.ClubUID && p.Club.TeamSlot == 0 {
-			squad = append(squad, p)
+			found = true
+			if !slices.Contains(in.Exclude, p.UID) {
+				squad = append(squad, p)
+			}
 		}
 	}
-	if len(squad) == 0 {
+	if !found {
 		return out, fmt.Errorf("no first-team players found for this club")
 	}
 	slices.SortFunc(squad, func(a, b player) int {

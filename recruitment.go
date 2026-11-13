@@ -165,16 +165,22 @@ func draftOffer(c career, in offerInput) (offerDraft, error) {
 	return out, fmt.Errorf("candidate not found in the configured snapshot")
 }
 
-func registerRecruitmentTools(server *mcp.Server, snapshot func() *career) {
-	c := snapshot()
-	if c.staff != nil {
+func registerRecruitmentTools(server *mcp.Server, initial career, current func(context.Context) (*career, error)) {
+	if initial.staff != nil {
 		addTool(server, "search_staff_candidates", "Rank staff by the attributes relevant to the requested job. Use a full staff JSON export to find outside candidates.", true,
-			func(_ context.Context, in staffSearchInput) (staffSearchOutput, error) {
-				return searchStaff(snapshot().staff, in)
+			func(ctx context.Context, in staffSearchInput) (staffSearchOutput, error) {
+				c, _ := current(ctx)
+				return searchStaff(c.staff, in)
 			})
 	}
-	if c.staff != nil || c.players != nil {
+	if initial.staff != nil || initial.players != nil {
 		addTool(server, "draft_recruitment_offer", "Prepare explicit transfer or staff contract terms and check them against any supplied budget. This returns a draft for the game's offer screen.", true,
-			func(_ context.Context, in offerInput) (offerDraft, error) { return draftOffer(*snapshot(), in) })
+			func(ctx context.Context, in offerInput) (offerDraft, error) {
+				c, err := current(ctx)
+				if err != nil && in.Kind != "staff_contract" {
+					return offerDraft{}, err
+				}
+				return draftOffer(*c, in)
+			})
 	}
 }

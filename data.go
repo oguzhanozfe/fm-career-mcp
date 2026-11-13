@@ -76,6 +76,7 @@ type staffData struct {
 type career struct {
 	players *playerData
 	staff   *staffData
+	save    os.FileInfo
 }
 
 type sources struct {
@@ -86,9 +87,11 @@ func (s sources) load(ctx context.Context) (career, error) {
 	var out career
 	playerPath := s.playerJSON
 	if s.save != "" {
-		if info, err := os.Stat(s.save); err != nil || !info.Mode().IsRegular() {
+		info, err := os.Stat(s.save)
+		if err != nil || !info.Mode().IsRegular() {
 			return out, errors.New("cannot read the configured FM save")
 		}
+		out.save = info
 		temp, err := os.MkdirTemp("", "fm-career-mcp-")
 		if err != nil {
 			return out, fmt.Errorf("create parser workspace: %w", err)
@@ -122,6 +125,12 @@ func (s sources) load(ctx context.Context) (career, error) {
 			return out, errors.New("staff data must be a FMLibreEditor staff JSON export")
 		}
 		out.staff = &data
+	}
+	if out.save != nil {
+		after, err := os.Stat(s.save)
+		if err != nil || !sameSaveRevision(out.save, after) {
+			return career{}, errors.New("the FM save changed while reading it; retry after saving finishes")
+		}
 	}
 	return out, nil
 }

@@ -45,7 +45,7 @@ func TestMCPReports(t *testing.T) {
 	}
 	defer session.Close()
 	tools, err := session.ListTools(ctx, nil)
-	if err != nil || len(tools.Tools) != 10 {
+	if err != nil || len(tools.Tools) != 13 {
 		t.Fatalf("unexpected default tools: %v, %v", tools, err)
 	}
 	for _, tool := range tools.Tools {
@@ -119,6 +119,18 @@ func TestXIReservesVersatilePlayerForOnlyFit(t *testing.T) {
 	out := selectXI(squad, []slotSpec{{"DC", "Centre-back"}, {"DR", "Full-back"}})
 	if out[0].PlayerUID != 2 || out[1].PlayerUID != 1 {
 		t.Fatalf("unexpected assignment: %+v", out)
+	}
+}
+
+func TestTacticCanRestFirstChoice(t *testing.T) {
+	club := &club{UID: 7}
+	data := &playerData{Players: []player{
+		{UID: 1, Club: club, CA: 150, Positions: map[string]int{"GK": 20}},
+		{UID: 2, Club: club, CA: 120, Positions: map[string]int{"GK": 20}},
+	}}
+	out, err := buildTactic(data, tacticInput{ClubUID: 7, Exclude: []uint32{1}})
+	if err != nil || out.XI[0].PlayerUID != 2 {
+		t.Fatalf("expected replacement goalkeeper, got %+v, %v", out, err)
 	}
 }
 
